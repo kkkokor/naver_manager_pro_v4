@@ -44,9 +44,24 @@ export const naverService = {
     return res.json();
   },
 
-  // [수정됨] 키워드 목록 가져오기 (targetRank 파라미터 추가)
+  // [NEW] 광고그룹 생성
+  async createAdGroup(nccCampaignId: string, name: string): Promise<AdGroup> {
+    const res = await fetch(`${API_BASE_URL}/api/adgroups`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-naver-access-key': localStorage.getItem('naver_access_key') || '',
+        'x-naver-secret-key': localStorage.getItem('naver_secret_key') || '',
+        'x-naver-customer-id': localStorage.getItem('naver_customer_id') || '',
+      },
+      body: JSON.stringify({ nccCampaignId, name }),
+    });
+    if (!res.ok) throw new Error('Failed to create adgroup');
+    return res.json();
+  },
+
+  // 키워드 목록 가져오기 (targetRank 파라미터 추가)
   async getKeywords(adGroupId: string, device: string, targetRank: number = 3): Promise<Keyword[]> {
-    // URL 뒤에 &target_rank=${targetRank} 를 붙여서 서버에 전달합니다.
     const res = await fetch(`${API_BASE_URL}/api/keywords?adgroup_id=${adGroupId}&device=${device}&target_rank=${targetRank}`, {
       headers: {
         'x-naver-access-key': localStorage.getItem('naver_access_key') || '',
@@ -136,7 +151,7 @@ export const naverService = {
     return res.json();
   },
 
-  // 확장소재 목록 가져오기
+  // 확장소재 목록 가져오기 (캠페인 기준)
   async getExtensions(campaignId: string): Promise<Extension[]> {
     const res = await fetch(`${API_BASE_URL}/api/extensions?campaign_id=${campaignId}`, {
       headers: {
@@ -146,6 +161,19 @@ export const naverService = {
       },
     });
     if (!res.ok) throw new Error('Failed to fetch extensions');
+    return res.json();
+  },
+
+  // [NEW] 확장소재 목록 가져오기 (그룹 기준 - 빠름!)
+  async getExtensionsByGroup(adGroupId: string): Promise<Extension[]> {
+    const res = await fetch(`${API_BASE_URL}/api/extensions?adgroup_id=${adGroupId}`, {
+      headers: {
+        'x-naver-access-key': localStorage.getItem('naver_access_key') || '',
+        'x-naver-secret-key': localStorage.getItem('naver_secret_key') || '',
+        'x-naver-customer-id': localStorage.getItem('naver_customer_id') || '',
+      },
+    });
+    if (!res.ok) throw new Error('Failed to fetch extensions by group');
     return res.json();
   },
 
@@ -195,7 +223,7 @@ export const naverService = {
     return res.json();
   },
 
-  // [중요] 대량 입찰가 업데이트 (AutoBidder 사용)
+  // 대량 입찰가 업데이트 (AutoBidder 사용)
   async bulkUpdateBids(items: any[]) {
     const res = await fetch(`${API_BASE_URL}/api/keywords/bid/bulk`, {
       method: 'PUT',
@@ -227,7 +255,7 @@ export const naverService = {
     return res.json();
   },
 
-  // [NEW] 로그 서버 저장 함수
+  // 로그 서버 저장 함수
   async saveBidLogs(logs: LogItem[]): Promise<void> {
     try {
       await fetch(`${API_BASE_URL}/api/log/save`, {

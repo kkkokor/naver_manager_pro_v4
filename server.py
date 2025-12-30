@@ -18,7 +18,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# [★수정] 윈도우 CMD에서 이모티콘(✅, ⚠️) 출력 시 튕기는 문제 해결 (UTF-8 강제 설정)
+# [안전장치] 출력 인코딩 강제 설정
 try:
     if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8')
@@ -43,6 +43,10 @@ app.add_middleware(
 BASE_URL = "https://api.searchad.naver.com"
 
 # --- Models ---
+class AdGroupCreateItem(BaseModel):
+    nccCampaignId: str
+    name: str
+
 class AdCreateItem(BaseModel):
     adGroupId: str
     headline: str
@@ -107,12 +111,11 @@ def call_api_sync(args):
         if resp.status_code == 200: 
             return resp.json()
         
-        # 에러 발생 시 상태 코드와 메시지 출력
-        print(f" API Error [{resp.status_code}]: {uri}")
+        print(f"[API Error] [{resp.status_code}]: {uri}")
         print(f"   -> Response: {resp.text[:200]}")
         return None
     except Exception as e: 
-        print(f" Network Error: {e}")
+        print(f"[Network Error]: {e}")
         return None
 
 # [통계 기간: 오늘 하루로 고정]
@@ -137,9 +140,6 @@ def fetch_stats(ids_list: list, auth: dict, since: str = None, until: str = None
             'timeRange': json.dumps(time_range) 
         }
         
-        if device and device in ['PC', 'MOBILE']:
-            pass 
-
         args = ("GET", "/stats", params, None, auth)
         res = call_api_sync(args)
         if res and 'data' in res:
@@ -257,7 +257,7 @@ async def track_visit(request: Request):
         save_visit_logs(logs)
         return {"success": True}
     except Exception as e:
-        print(f"Tracking Error: {e}")
+        print(f"[Tracking Error]: {e}")
         return {"success": False}
 
 @app.get("/api/track/logs")
@@ -290,7 +290,7 @@ def save_bid_logs(items: List[LogItem]):
                 
         return {"status": "success", "count": len(items)}
     except Exception as e:
-        print(f"Log save error: {e}")
+        print(f"[Log save error]: {e}")
         return {"status": "error", "message": str(e)}
 
 # --- Endpoints ---
@@ -321,12 +321,28 @@ def get_adgroups(campaign_id: str = Query(...), x_naver_access_key: str = Header
         "bidAmt": g.get('bidAmt', 0), "status": g.get('status', 'UNKNOWN'), "stats": format_stats(stats_map.get(g['nccAdgroupId']))
     } for g in groups]
 
-# [★핵심 수정] target_rank 파라미터 추가 & POST 방식 & 키워드 ID 확인 강화
+# [NEW] 광고 그룹 생성 API
+@app.post("/api/adgroups")
+def create_adgroup(
+    item: AdGroupCreateItem, 
+    x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)
+):
+    auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
+    body = {"nccCampaignId": item.nccCampaignId, "name": item.name}
+    res = call_api_sync(("POST", "/ncc/adgroups", None, json.dumps([body]), auth))
+    
+    if res and isinstance(res, list) and len(res) > 0:
+        return res[0] # 생성된 그룹 정보 반환
+    elif res and 'nccAdgroupId' in res:
+        return res
+    
+    raise HTTPException(status_code=400, detail="그룹 생성 실패")
+
 @app.get("/api/keywords")
 def get_keywords(
     adgroup_id: str = Query(...), 
     device: Optional[str] = Query(None),
-    target_rank: int = Query(3),  # [추가됨] 화면에서 보낸 목표 순위 (기본값 3)
+    target_rank: int = Query(3), 
     x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
     
     auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
@@ -340,36 +356,23 @@ def get_keywords(
     
     api_device = device if device in ['PC', 'MOBILE'] else 'MOBILE'
 
-    # Estimate API 호출 (POST 방식)
     chunk_size = 50 
     for i in range(0, len(ids_for_est), chunk_size):
         chunk = ids_for_est[i:i + chunk_size]
-        
-        # [수정] 목표 순위(target_rank)를 반영하여 요청 생성
         req_items = [{"key": kw_id, "position": target_rank} for kw_id in chunk]
-        body = {
-            "device": api_device,
-            "items": req_items
-        }
+        body = { "device": api_device, "items": req_items }
         
-        # [수정] POST 메서드 및 정확한 주소(/id)
         args = ("POST", "/estimate/average-position-bid/id", None, body, auth)
         res = call_api_sync(args)
         
-        # [DEBUG] 결과 확인
         if res and 'estimate' in res:
-            print(f"[API 성공] 예상가 {len(res['estimate'])}개 수신 완료 (목표: {target_rank}위).")
+            print(f"[API SUCCESS] 예상가 {len(res['estimate'])}개 수신 완료 (목표: {target_rank}위).")
             for item in res['estimate']:
-                # [수정] nccKeywordId, keywordId, key 모두 확인
                 k_id = item.get('nccKeywordId') or item.get('keywordId') or item.get('key')
                 bid_val = item.get('bid', 0)
-                
-                if k_id:
-                    # 응답받은 입찰가를 목표 순위(target_rank) 데이터로 저장
-                    estimates_map[k_id] = [{"rank": target_rank, "bid": bid_val}]
+                if k_id: estimates_map[k_id] = [{"rank": target_rank, "bid": bid_val}]
         else:
-            print(f"[API 실패] 예상가 수신 실패 (res: {res})")
-            
+            print(f"[API FAILED] 예상가 수신 실패 (res: {res})")
         time.sleep(0.05)
 
     stats_map = fetch_stats(ids_for_est, auth)
@@ -440,25 +443,47 @@ def get_channels(x_naver_access_key: str = Header(...), x_naver_secret_key: str 
         })
     return result
 
+# [★ 핵심 수정] 확장소재 조회 (캠페인 또는 그룹 ID로 조회 가능)
 @app.get("/api/extensions")
-def get_extensions(campaign_id: str = Query(...), x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
+def get_extensions(
+    campaign_id: Optional[str] = Query(None), 
+    adgroup_id: Optional[str] = Query(None),
+    x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)
+):
     auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
-    groups = call_api_sync(("GET", "/ncc/adgroups", {'nccCampaignId': campaign_id}, None, auth))
-    if not groups: return []
     all_exts = []
     
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        futures = [executor.submit(call_api_sync, ("GET", "/ncc/extensions", {'nccAdgroupId': g['nccAdgroupId']}, None, auth)) for g in groups]
-        for f in as_completed(futures):
-            res = f.result()
-            if res:
-                for ext in res:
-                    ext['type'] = normalize_type(ext.get('type', 'UNKNOWN'))
-                    raw_type = ext.get('type', '').lower()
-                    if raw_type not in ext and 'extension' not in ext:
-                         if ext.get(raw_type): ext['extension'] = ext[raw_type]
-                    all_exts.append(ext)
-    return all_exts
+    # 1. 특정 그룹만 조회 (빠름!)
+    if adgroup_id:
+        res = call_api_sync(("GET", "/ncc/extensions", {'nccAdgroupId': adgroup_id}, None, auth))
+        if res:
+            for ext in res:
+                ext['type'] = normalize_type(ext.get('type', 'UNKNOWN'))
+                raw_type = ext.get('type', '').lower()
+                if raw_type not in ext and 'extension' not in ext:
+                        if ext.get(raw_type): ext['extension'] = ext[raw_type]
+                all_exts.append(ext)
+        return all_exts
+
+    # 2. 캠페인 전체 조회 (기존 방식)
+    if campaign_id:
+        groups = call_api_sync(("GET", "/ncc/adgroups", {'nccCampaignId': campaign_id}, None, auth))
+        if not groups: return []
+        
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(call_api_sync, ("GET", "/ncc/extensions", {'nccAdgroupId': g['nccAdgroupId']}, None, auth)) for g in groups]
+            for f in as_completed(futures):
+                res = f.result()
+                if res:
+                    for ext in res:
+                        ext['type'] = normalize_type(ext.get('type', 'UNKNOWN'))
+                        raw_type = ext.get('type', '').lower()
+                        if raw_type not in ext and 'extension' not in ext:
+                                if ext.get(raw_type): ext['extension'] = ext[raw_type]
+                        all_exts.append(ext)
+        return all_exts
+    
+    return []
 
 @app.post("/api/extensions")
 def create_extension(item: ExtensionCreateItem, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
@@ -560,39 +585,74 @@ def delete_ip_exclusion(ip: str, x_naver_access_key: str = Header(...), x_naver_
     if res is not None: return {"success": True}
     raise HTTPException(status_code=400, detail="삭제 실패")
 
+@app.get("/api/tool/count-total-keywords")
+def count_total_keywords(
+    x_naver_access_key: str = Header(...), 
+    x_naver_secret_key: str = Header(...), 
+    x_naver_customer_id: str = Header(...)
+):
+    auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
+    print("[INFO] 계정 내 모든 키워드 개수를 계산합니다...")
+    camps = call_api_sync(("GET", "/ncc/campaigns", None, None, auth))
+    if not camps: return {"total": 0, "detail": "캠페인 없음"}
+    
+    total_count = 0
+    camp_details = []
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_camp = {
+            executor.submit(call_api_sync, ("GET", "/ncc/adgroups", {'nccCampaignId': c['nccCampaignId']}, None, auth)): c 
+            for c in camps
+        }
+        for future in as_completed(future_to_camp):
+            camp = future_to_camp[future]
+            groups = future.result() or []
+            camp_kwd_count = 0
+            if groups:
+                group_futures = [
+                    executor.submit(call_api_sync, ("GET", "/ncc/keywords", {'nccAdgroupId': g['nccAdgroupId']}, None, auth)) 
+                    for g in groups
+                ]
+                for gf in as_completed(group_futures):
+                    kwds = gf.result()
+                    if kwds: camp_kwd_count += len(kwds)
+            total_count += camp_kwd_count
+            camp_details.append({"name": camp['name'], "count": camp_kwd_count})
+            print(f"   -> '{camp['name']}': {camp_kwd_count}개")
+
+    print(f"[INFO] 총 키워드 개수: {total_count}개")
+    return {
+        "total_keywords": total_count,
+        "limit": 100000,
+        "remaining": 100000 - total_count,
+        "usage_percent": round((total_count / 100000) * 100, 2),
+        "details": sorted(camp_details, key=lambda x: x['count'], reverse=True)
+    }
+
 # ---------------------------------------------------------------------
-# [수정된 파일 연결 로직] - 이 부분을 server.py 맨 아래에 덮어쓰세요!
+# [수정된 파일 연결 로직]
 # ---------------------------------------------------------------------
 
-# 1. 실행 환경에 따라 경로 설정
 if getattr(sys, 'frozen', False):
-    # [배포용 EXE 실행 시] 내부의 'dist' 폴더 사용
     dist_path = os.path.join(sys._MEIPASS, "dist")
 else:
-    # [개발용 로컬 실행 시] 'frontend' 폴더 우선 탐색!
     base_dir = os.path.dirname(__file__)
     frontend_path = os.path.join(base_dir, "frontend")
     dist_local_path = os.path.join(base_dir, "dist")
-    
-    # frontend 폴더가 있고, 그 안에 index.html이 진짜로 있는지 확인
     if os.path.exists(frontend_path) and os.path.exists(os.path.join(frontend_path, "index.html")):
         dist_path = frontend_path
     else:
-        # 없으면 그냥 dist 폴더 사용 (이 경우 404가 뜰 수 있음)
         dist_path = dist_local_path
 
-# 2. 정적 파일 연결 (Mount)
 if os.path.exists(dist_path) and os.path.exists(os.path.join(dist_path, "index.html")):
     app.mount("/", StaticFiles(directory=dist_path, html=True), name="static")
-    print(f"[성공] 화면 파일을 연결했습니다: {dist_path}")
+    print(f"[SUCCESS] 화면 파일을 연결했습니다: {dist_path}")
 else:
-    # 경로가 없거나 파일이 없는 경우 안내 메시지 출력
-    print(f"[실패] 화면 파일을 찾을 수 없습니다. (경로: {dist_path})")
+    print(f"[FAILED] 화면 파일을 찾을 수 없습니다. (경로: {dist_path})")
     @app.get("/")
     def read_root():
         return HTMLResponse(content=f"""
             <div style="text-align: center; padding: 40px; font-family: sans-serif;">
-                <h1>⚠️ 화면 파일(index.html)이 없습니다.</h1>
+                <h1>[ERROR] 화면 파일(index.html)이 없습니다.</h1>
                 <p>현재 서버가 확인한 경로: <b>{dist_path}</b></p>
                 <hr>
                 <p><b>[해결 방법]</b></p>
