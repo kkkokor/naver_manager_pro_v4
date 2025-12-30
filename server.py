@@ -419,31 +419,32 @@ def get_ads(campaign_id: Optional[str] = None, adgroup_id: Optional[str] = None,
         return convert_ads(all_ads)
     return []
 
-# [1] 소재(Ad) 생성 API 수정 (배열 포장 복구 + 딕셔너리 전송)
+# [1] 소재(Ad) 생성 API 수정 (isList=true 추가)
 @app.post("/api/ads")
 def create_ad(item: AdCreateItem, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
     auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
     
-    # [핵심 1] 소재 내용은 딕셔너리(객체)로 준비
+    # 1. 소재 내용
     ad_content = {
         "headline": item.headline,
         "description": item.description
     }
     
-    # [핵심 2] Body 구성 (ad 필드도 딕셔너리 그대로)
+    # 2. Body 구성
     body = {
         "type": "TEXT", 
         "nccAdgroupId": item.adGroupId, 
         "ad": ad_content 
     }
     
-    # [★핵심 3] 최종 전송 시 '리스트([body])' 형태로 포장하여 전송
-    # json.dumps는 사용하지 않음 (requests가 처리)
-    res = call_api_sync(("POST", "/ncc/ads", None, [body], auth))
+    # [★핵심] URL 뒤에 ?isList=true 붙이기
+    # [★핵심] Body를 리스트([body])로 감싸기
+    uri = "/ncc/ads?isList=true"
+    res = call_api_sync(("POST", uri, None, [body], auth))
     
     if res: return res
     
-    print(f"[Create Ad Failed] Body: {json.dumps([body], ensure_ascii=False)}")
+    print(f"[FAIL] Ad Body: {json.dumps([body], ensure_ascii=False)}")
     raise HTTPException(status_code=400, detail="Failed to create ad")
 
 @app.delete("/api/ads/{ad_id}")
@@ -500,7 +501,7 @@ def get_extensions(
     
     return []
 
-# [2] 확장소재 생성 API 수정 (배열 포장 복구 + 데이터 정제)
+# [2] 확장소재 생성 API 수정 (isList=true 추가)
 @app.post("/api/extensions")
 def create_extension(item: ExtensionCreateItem, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
     auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
@@ -513,11 +514,9 @@ def create_extension(item: ExtensionCreateItem, x_naver_access_key: str = Header
 
     ext_type = item.type.upper()
     
-    # 1. PHONE, LOCATION 등은 adExtension 필드 자체가 없어야 함
+    # 확장소재 데이터 정제
     if ext_type in ["PHONE", "PLACE", "LOCATION"]:
-        pass
-
-    # 2. 나머지는 데이터가 있어야 함
+        pass # 빈손으로 감
     else:
         raw_attrs = item.attributes or {}
         clean_attrs = raw_attrs.copy()
@@ -529,21 +528,16 @@ def create_extension(item: ExtensionCreateItem, x_naver_access_key: str = Header
         if ext_type == "WEBSITE_INFO":
             clean_attrs["agree"] = True
 
-        # [★핵심 4] adExtension 필드에 '딕셔너리'를 넣음 (문자열 변환 X)
         if clean_attrs:
             body["adExtension"] = clean_attrs
-        else:
-            if ext_type not in ["PHONE", "PLACE", "LOCATION"]:
-                 body["adExtension"] = {}
 
-    print(f"[DEBUG] Creating Ext ({ext_type}): {json.dumps([body], ensure_ascii=False)}")
-
-    # [★핵심 5] 최종 전송 시 '리스트([body])' 형태로 포장
-    res = call_api_sync(("POST", "/ncc/ad-extensions", None, [body], auth))
+    # [★핵심] URL 뒤에 ?isList=true 붙이기
+    uri = "/ncc/ad-extensions?isList=true"
+    res = call_api_sync(("POST", uri, None, [body], auth))
     
     if res: return res
     
-    print(f"[FAIL] Ext Creation Failed.")
+    print(f"[FAIL] Ext Body: {json.dumps([body], ensure_ascii=False)}")
     raise HTTPException(status_code=400, detail="Failed to create extension")
 
 @app.delete("/api/extensions")
