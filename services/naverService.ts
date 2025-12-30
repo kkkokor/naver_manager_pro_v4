@@ -44,7 +44,7 @@ export const naverService = {
     return res.json();
   },
 
-  // [NEW] 광고그룹 생성
+  // 광고그룹 생성
   async createAdGroup(nccCampaignId: string, name: string): Promise<AdGroup> {
     const res = await fetch(`${API_BASE_URL}/api/adgroups`, {
       method: 'POST',
@@ -60,7 +60,7 @@ export const naverService = {
     return res.json();
   },
 
-  // 키워드 목록 가져오기 (targetRank 파라미터 추가)
+  // 키워드 목록 가져오기
   async getKeywords(adGroupId: string, device: string, targetRank: number = 3): Promise<Keyword[]> {
     const res = await fetch(`${API_BASE_URL}/api/keywords?adgroup_id=${adGroupId}&device=${device}&target_rank=${targetRank}`, {
       headers: {
@@ -122,7 +122,7 @@ export const naverService = {
     return res.json();
   },
 
-  // 소재 상태 변경 (ON/OFF)
+  // 소재 상태 변경
   async updateAdStatus(adId: string, status: string) {
     const res = await fetch(`${API_BASE_URL}/api/ads/${adId}/status`, {
       method: 'PUT',
@@ -151,7 +151,7 @@ export const naverService = {
     return res.json();
   },
 
-  // 확장소재 목록 가져오기 (캠페인 기준)
+  // 확장소재 목록 가져오기 (캠페인)
   async getExtensions(campaignId: string): Promise<Extension[]> {
     const res = await fetch(`${API_BASE_URL}/api/extensions?campaign_id=${campaignId}`, {
       headers: {
@@ -164,7 +164,7 @@ export const naverService = {
     return res.json();
   },
 
-  // [NEW] 확장소재 목록 가져오기 (그룹 기준 - 빠름!)
+  // [중요] 확장소재 목록 가져오기 (그룹 기준)
   async getExtensionsByGroup(adGroupId: string): Promise<Extension[]> {
     const res = await fetch(`${API_BASE_URL}/api/extensions?adgroup_id=${adGroupId}`, {
       headers: {
@@ -223,7 +223,7 @@ export const naverService = {
     return res.json();
   },
 
-  // 대량 입찰가 업데이트 (AutoBidder 사용)
+  // 대량 입찰가 업데이트
   async bulkUpdateBids(items: any[]) {
     const res = await fetch(`${API_BASE_URL}/api/keywords/bid/bulk`, {
       method: 'PUT',
@@ -239,7 +239,7 @@ export const naverService = {
     return res.json();
   },
 
-  // 키워드 대량 생성 (확장 기능용)
+  // 키워드 대량 생성
   async createKeywordsBulk(items: any[]) {
     const res = await fetch(`${API_BASE_URL}/api/keywords/bulk`, {
       method: 'POST',
@@ -255,7 +255,7 @@ export const naverService = {
     return res.json();
   },
 
-  // 로그 서버 저장 함수
+  // 로그 저장
   async saveBidLogs(logs: LogItem[]): Promise<void> {
     try {
       await fetch(`${API_BASE_URL}/api/log/save`, {
@@ -268,7 +268,7 @@ export const naverService = {
     }
   },
   
-  // IP 차단 목록 가져오기
+  // IP 차단
   async getIpExclusions() {
     const res = await fetch(`${API_BASE_URL}/api/tool/ip-exclusion`, {
       headers: {
@@ -281,7 +281,6 @@ export const naverService = {
     return res.json();
   },
 
-  // IP 차단 추가
   async addIpExclusion(ip: string, memo: string) {
     const res = await fetch(`${API_BASE_URL}/api/tool/ip-exclusion`, {
       method: 'POST',
@@ -297,7 +296,6 @@ export const naverService = {
     return res.json();
   },
 
-  // IP 차단 삭제
   async deleteIpExclusion(ip: string) {
     const res = await fetch(`${API_BASE_URL}/api/tool/ip-exclusion/${ip}`, {
       method: 'DELETE',

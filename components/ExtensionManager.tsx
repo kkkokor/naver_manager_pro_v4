@@ -3,7 +3,7 @@ import { naverService } from '../services/naverService';
 import { Extension, Campaign } from '../types';
 import { 
   Phone, MapPin, Link as LinkIcon, Image as ImageIcon, 
-  Grid, Loader2, RefreshCw, AlertCircle, PhoneCall, Globe 
+  Grid, Loader2, RefreshCw, AlertCircle, PhoneCall, Globe, Calculator, AlertTriangle 
 } from 'lucide-react';
 
 export const ExtensionManager: React.FC = () => {
@@ -13,12 +13,10 @@ export const ExtensionManager: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<string>('ALL');
 
-  // 1. 처음 들어오면 캠페인 목록부터 가져옴
   useEffect(() => {
     loadCampaigns();
   }, []);
 
-  // 2. 캠페인을 선택하면 확장소재 목록을 가져옴
   useEffect(() => {
     if (selectedCampaignId) {
       loadExtensions(selectedCampaignId);
@@ -48,61 +46,62 @@ export const ExtensionManager: React.FC = () => {
     }
   };
 
-  // 탭 변경 함수
   const tabs = [
     { id: 'ALL', label: '전체 보기', icon: Grid },
-    { id: 'PHONE_NUMBER', label: '전화번호', icon: Phone },
-    { id: 'PLACE', label: '위치정보', icon: MapPin },
-    { id: 'ADDITIONAL_LINK', label: '추가링크', icon: LinkIcon },
-    { id: 'MOBILE_IMAGE', label: '모바일이미지', icon: ImageIcon },
+    { id: 'PHONE', label: '전화번호', icon: Phone },
+    { id: 'LOCATION', label: '위치정보', icon: MapPin },
+    { id: 'SUB_LINKS', label: '서브링크', icon: LinkIcon },
+    { id: 'PRICE_LINKS', label: '가격링크', icon: Calculator },
+    { id: 'POWER_LINK_IMAGE', label: '파워링크이미지', icon: ImageIcon },
+    { id: 'IMAGES', label: '이미지', icon: ImageIcon },
   ];
 
   const filteredExtensions = activeTab === 'ALL' 
     ? extensions 
     : extensions.filter(e => e.type === activeTab);
 
-  // 확장소재 내용 렌더링 도우미
   const renderExtensionContent = (ext: Extension) => {
-    const details = ext.extension || {}; // 세부 속성
+    const details = ext.extension || {}; 
 
     switch (ext.type) {
-      case 'PHONE_NUMBER':
+      case 'PHONE':
         return (
           <div className="flex items-center text-gray-700">
             <PhoneCall className="w-4 h-4 mr-2 text-green-600"/>
             <span className="font-bold">{details.phoneNumber || '전화번호 정보 없음'}</span>
           </div>
         );
-      case 'PLACE':
+      case 'LOCATION':
         return (
           <div className="text-sm">
             <div className="font-bold flex items-center"><MapPin className="w-3 h-3 mr-1 text-blue-500"/> {details.businessName || '업체명 없음'}</div>
             <div className="text-gray-500 text-xs mt-1">{details.roadAddress || details.address || ''}</div>
           </div>
         );
-      case 'ADDITIONAL_LINK':
+      case 'SUB_LINKS':
         return (
           <div className="text-sm">
-             <div className="font-bold">{details.linkName || '링크명 없음'}</div>
-             <a href={details.pcUrl} target="_blank" rel="noreferrer" className="text-blue-400 hover:underline text-xs flex items-center mt-1">
-               <Globe className="w-3 h-3 mr-1"/> {details.pcUrl}
-             </a>
+             <div className="font-bold mb-1">서브링크 목록</div>
+             {details.links && Array.isArray(details.links) && details.links.map((link: any, i: number) => (
+                 <div key={i} className="text-xs text-gray-600 truncate">- {link.linkName} ({link.pcUrl})</div>
+             ))}
           </div>
         );
-      case 'MOBILE_IMAGE':
+      case 'POWER_LINK_IMAGE':
+      case 'IMAGES':
         return (
            <div className="flex items-center gap-3">
              {details.imgUrl && <img src={details.imgUrl} alt="확장소재" className="w-16 h-16 object-cover rounded border"/>}
              <div>
-               <div className="font-bold text-sm">{details.title || '이미지 제목'}</div>
+               <div className="font-bold text-sm">{details.title || '이미지'}</div>
                <div className="text-xs text-gray-500">{details.description || ''}</div>
              </div>
            </div>
         );
-      default: // 기타(블로그 등)
+      default: 
         return (
-          <div className="text-xs text-gray-500">
-            {JSON.stringify(details).slice(0, 50)}...
+          <div className="text-xs text-gray-500 break-all">
+            {JSON.stringify(details).slice(0, 100)}...
           </div>
         );
     }
@@ -110,7 +109,6 @@ export const ExtensionManager: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {/* 1. 상단 헤더 & 캠페인 선택 */}
       <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
         <h2 className="text-2xl font-bold text-gray-800 mb-4 flex items-center">
            <Grid className="w-6 h-6 mr-2 text-indigo-600"/> 확장소재 관리
@@ -139,11 +137,8 @@ export const ExtensionManager: React.FC = () => {
         </div>
       </div>
 
-      {/* 2. 메인 컨텐츠 영역 */}
       {selectedCampaignId ? (
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden min-h-[500px] flex flex-col">
-          
-          {/* 탭 메뉴 */}
           <div className="flex border-b overflow-x-auto">
             {tabs.map(tab => (
               <button
@@ -161,7 +156,6 @@ export const ExtensionManager: React.FC = () => {
             ))}
           </div>
 
-          {/* 목록 표시 */}
           <div className="p-6 flex-1 bg-gray-50">
             {loading ? (
               <div className="flex flex-col items-center justify-center h-64 text-gray-400">
@@ -173,15 +167,31 @@ export const ExtensionManager: React.FC = () => {
                 {filteredExtensions.map((ext, idx) => (
                   <div key={ext.nccExtensionId || idx} className="bg-white p-4 rounded-lg border hover:shadow-md transition-shadow relative">
                     <div className="flex justify-between items-start mb-3">
-                      <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${ext.userLock ? 'bg-gray-100 text-gray-500' : 'bg-green-100 text-green-700'}`}>
-                        {ext.userLock ? 'OFF (중지)' : 'ON (노출중)'}
-                      </span>
-                      <span className="text-xs text-gray-400">{ext.type}</span>
+                      <div className="flex gap-2">
+                        <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${ext.userLock ? 'bg-gray-100 text-gray-500' : 'bg-green-100 text-green-700'}`}>
+                          {ext.userLock ? 'OFF' : 'ON'}
+                        </span>
+                        {/* 검수 상태 표시 */}
+                        {ext.inspectStatus && (
+                          <span className={`text-[10px] px-2 py-0.5 rounded font-bold ${ext.inspectStatus === 'APPROVED' ? 'bg-blue-100 text-blue-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                            {ext.inspectStatus}
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-xs text-gray-400 font-mono">{ext.type}</span>
                     </div>
                     
                     <div className="mb-4">
                       {renderExtensionContent(ext)}
                     </div>
+
+                    {/* 반려 사유 표시 */}
+                    {ext.statusReason && ext.statusReason !== 'ELIGIBLE' && (
+                      <div className="text-xs text-red-500 mt-2 bg-red-50 p-1 rounded flex items-center">
+                        <AlertTriangle className="w-3 h-3 mr-1"/>
+                        {ext.statusReason}
+                      </div>
+                    )}
 
                     <div className="text-right mt-2 pt-2 border-t border-gray-100">
                       <button className="text-xs text-gray-400 hover:text-red-500 underline">삭제</button>
@@ -198,11 +208,9 @@ export const ExtensionManager: React.FC = () => {
           </div>
         </div>
       ) : (
-        // 캠페인 미선택 시 안내 화면
         <div className="flex flex-col items-center justify-center h-96 bg-gray-50 rounded-xl border-2 border-dashed border-gray-300 text-gray-400">
           <Grid className="w-12 h-12 mb-4 opacity-20"/>
           <p className="text-lg font-medium">관리할 캠페인을 먼저 선택해주세요.</p>
-          <p className="text-sm">상단 드롭다운에서 캠페인을 선택하면 확장소재가 표시됩니다.</p>
         </div>
       )}
     </div>
