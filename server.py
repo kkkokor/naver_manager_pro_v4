@@ -180,29 +180,58 @@ def format_stats(stat_item):
         "roas": round(roas, 0)
     }
 
+def normalize_type(raw_type: str) -> str:
+    t = raw_type.upper()
+    if 'SUB' in t or 'LINK' in t:
+        if 'BLOG' not in t and 'URL' not in t and 'IMAGE' not in t: return 'ADDITIONAL_LINK'
+    if 'PHONE' in t: return 'PHONE_NUMBER'
+    if 'LOC' in t or 'PLACE' in t: return 'PLACE'
+    if 'URL' in t: return 'URL'
+    if 'IMG' in t or 'IMAGE' in t: return 'MOBILE_IMAGE'
+    if 'TITLE' in t: return 'ADDITIONAL_TITLE'
+    if 'PROMO' in t: return 'PROMOTION_TEXT'
+    if 'BLOG' in t or 'CAFE' in t: return 'BLOG'
+    return t
+
+# [수정됨] 소재(Ad) 데이터 정제: 이중 포장 뜯기
 def convert_ads(ad_list):
     result = []
     for ad in ad_list:
-        details = ad.get('ad', {})
+        raw_details = ad.get('ad')
+        details = {}
+        
+        # 1. 만약 details가 문자열(JSON String)이면 파싱
+        if isinstance(raw_details, str):
+            try:
+                details = json.loads(raw_details)
+            except:
+                details = {}
+        elif isinstance(raw_details, dict):
+            details = raw_details
+            
         result.append({
-            "nccAdId": ad['nccAdId'], "nccAdGroupId": ad['nccAdgroupId'], "type": ad.get('type', 'TEXT'),
-            "headline": details.get('headline', '-'), "description": details.get('description', '-'),
+            "nccAdId": ad['nccAdId'], 
+            "nccAdGroupId": ad['nccAdgroupId'], 
+            "type": ad.get('type', 'TEXT'),
+            "headline": details.get('headline', '-'), 
+            "description": details.get('description', '-'),
             "status": ad.get('userLock', False)
         })
     return result
 
-# [수정됨] 확장소재 데이터 정제 함수 (공식 문서 기준)
+# [수정됨] 확장소재 데이터 정제: 이중 포장 뜯기
 def format_extension(ext):
-    # 1. 포장지(adExtension 문자열) 뜯기
     content_str = ext.get('adExtension')
     content = {}
     if content_str:
-        try:
-            content = json.loads(content_str)
-        except:
-            content = {}
+        if isinstance(content_str, str):
+            try:
+                content = json.loads(content_str)
+            except:
+                content = {}
+        elif isinstance(content_str, dict):
+            content = content_str
     
-    # 2. 결과 객체에 'extension' 필드로 예쁘게 담아주기
     ext['extension'] = content
     return ext
 
@@ -432,7 +461,6 @@ def get_channels(x_naver_access_key: str = Header(...), x_naver_secret_key: str 
         })
     return result
 
-# [★ 핵심 수정] 확장소재 조회 (공식 문서: /ncc/ad-extensions, 파라미터 ownerId)
 @app.get("/api/extensions")
 def get_extensions(
     campaign_id: Optional[str] = Query(None), 
@@ -442,9 +470,8 @@ def get_extensions(
     auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
     all_exts = []
     
-    # 1. 특정 그룹만 조회 (빠름!)
+    # 1. 특정 그룹만 조회
     if adgroup_id:
-        # [수정] endpoint: /ncc/ad-extensions, param: ownerId
         res = call_api_sync(("GET", "/ncc/ad-extensions", {'ownerId': adgroup_id}, None, auth))
         if res:
             for ext in res:
@@ -457,7 +484,6 @@ def get_extensions(
         if not groups: return []
         
         with ThreadPoolExecutor(max_workers=10) as executor:
-            # [수정] endpoint: /ncc/ad-extensions, param: ownerId
             futures = [executor.submit(call_api_sync, ("GET", "/ncc/ad-extensions", {'ownerId': g['nccAdgroupId']}, None, auth)) for g in groups]
             for f in as_completed(futures):
                 res = f.result()
@@ -468,38 +494,20 @@ def get_extensions(
     
     return []
 
-# [★ 핵심 수정] 확장소재 생성 (공식 문서 기준: ownerId 필수, adExtension은 JSON 문자열)
 @app.post("/api/extensions")
 def create_extension(item: ExtensionCreateItem, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
     auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
     
-    # 공식 문서에 따른 생성 Payload 구성
-    body = {
-        "ownerId": item.adGroupId, # nccAdgroupId 대신 ownerId
-        "type": item.type,
-    }
+    body = { "ownerId": item.adGroupId, "type": item.type }
+    content_dict = item.attributes or {}
     
-    # adExtension 필드 생성 (JSON 문자열로 변환)
-    content_dict = {}
-    if item.attributes:
-        content_dict = item.attributes
-    
-    # 채널 ID가 있다면 그것도 포함 (보통 채널형 소재는 별도 필드가 있을 수 있으나, 문서상 adExtension에 넣거나 top-level일 수 있음. 
-    # 하지만 조회 시 mobileChannelId 등이 오는걸 보면 생성 시에도 top-level 지원할 가능성 높음. 
-    # 안전하게 둘 다 고려)
     if item.businessChannelId:
         body["pcChannelId"] = item.businessChannelId
         body["mobileChannelId"] = item.businessChannelId
     
-    # 최종적으로 adExtension 필드에 JSON 문자열 탑재
     body["adExtension"] = json.dumps(content_dict)
 
-    res = call_api_sync(("POST", "/ncc/ad-extensions", None, json.dumps([body]), auth)) # 배열로 보내야 함? 보통 단건은 객체지만 네이버는 배열 선호
-    
-    # 만약 배열이 아니라 단건으로 보내야 한다면 수정. 하지만 네이버는 대량 등록을 위해 배열을 받는 경우가 많음.
-    # 안전하게 단건 생성 시도 -> 공식 문서는 POST /ncc/ad-extensions (single or array? 보통 API 문서에 example이 있음)
-    # call_api_sync에서 리스트면 리스트로 보냄. 여기서는 리스트로 감싸서 보냄.
-    
+    res = call_api_sync(("POST", "/ncc/ad-extensions", None, json.dumps([body]), auth))
     if res: return res
     raise HTTPException(status_code=400, detail="Failed to create extension")
 
@@ -507,7 +515,6 @@ def create_extension(item: ExtensionCreateItem, x_naver_access_key: str = Header
 def delete_extension(adGroupId: str, extensionId: Optional[str] = None, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
     auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
     if extensionId:
-        # [수정] endpoint: /ncc/ad-extensions
         res = call_api_sync(("DELETE", f"/ncc/ad-extensions/{extensionId}", None, None, auth))
         if res is not None: return {"success": True}
     return {"success": False}
@@ -516,7 +523,6 @@ def delete_extension(adGroupId: str, extensionId: Optional[str] = None, x_naver_
 def update_extension_status(ext_id: str, update: StatusUpdate, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
     auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
     target_lock = True if update.status == 'PAUSED' else False
-    # [수정] endpoint: /ncc/ad-extensions
     res = call_api_sync(("PUT", f"/ncc/ad-extensions/{ext_id}", {'fields': 'userLock'}, {"userLock": target_lock}, auth))
     if res: return {"success": True}
     raise HTTPException(status_code=400, detail="Failed to update extension status")
@@ -637,10 +643,6 @@ def count_total_keywords(
         "usage_percent": round((total_count / 100000) * 100, 2),
         "details": sorted(camp_details, key=lambda x: x['count'], reverse=True)
     }
-
-# ---------------------------------------------------------------------
-# [수정된 파일 연결 로직]
-# ---------------------------------------------------------------------
 
 if getattr(sys, 'frozen', False):
     dist_path = os.path.join(sys._MEIPASS, "dist")
