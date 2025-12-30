@@ -29,6 +29,9 @@ export const ExtensionManager: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<string>('ALL');
   
+  // 동적으로 생성될 탭 목록
+  const [dynamicTabs, setDynamicTabs] = useState<{id: string, label: string, icon: any}[]>([]);
+  
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -42,6 +45,7 @@ export const ExtensionManager: React.FC = () => {
     } else {
       setGroupedExtensions([]);
       setAdGroups([]);
+      setDynamicTabs([]);
     }
   }, [selectedCampaignId]);
 
@@ -79,6 +83,20 @@ export const ExtensionManager: React.FC = () => {
       const grouped = groupExtensions(exts, groupMap, channelMap);
       setGroupedExtensions(grouped);
 
+      // 5. 탭 생성 logic: 데이터에 존재하는 타입만 탭으로 만듦
+      const types = new Set(grouped.map(g => g.type));
+      const newTabs = [{ id: 'ALL', label: '전체', icon: Grid }];
+      
+      if (types.has('PHONE')) newTabs.push({ id: 'PHONE', label: '전화번호', icon: Phone });
+      if (types.has('LOCATION') || types.has('PLACE')) newTabs.push({ id: 'LOCATION', label: '위치', icon: MapPin });
+      if (types.has('SUB_LINKS')) newTabs.push({ id: 'SUB_LINKS', label: '서브링크', icon: LinkIcon });
+      if (types.has('WEBSITE_INFO')) newTabs.push({ id: 'WEBSITE_INFO', label: '웹사이트', icon: Globe });
+      if (types.has('POWER_LINK_IMAGE') || types.has('IMAGE_SUB_LINKS')) newTabs.push({ id: 'IMAGES', label: '이미지', icon: ImageIcon });
+      
+      // 기타 타입이 있으면 '기타' 탭 추가 가능, 일단은 여기까지
+      setDynamicTabs(newTabs);
+      setActiveTab('ALL'); // 리셋
+
     } catch (error) {
       console.error("데이터 로딩 실패:", error);
     } finally {
@@ -95,7 +113,7 @@ export const ExtensionManager: React.FC = () => {
       
       // 비즈채널 정보 찾기
       const channelInfo = channelId ? channelMap[channelId] : undefined;
-      const channelKey = channelId; // ID로 구분
+      const channelKey = channelId; 
 
       const uniqueKey = `${ext.type}|${contentKey}|${channelKey}`;
 
@@ -106,7 +124,7 @@ export const ExtensionManager: React.FC = () => {
           content: ext.extension,
           businessChannelId: channelId,
           channelName: channelInfo?.name,
-          channelUrl: (channelInfo as any)?.channelKey, // URL 등이 여기에 있을 수 있음
+          channelUrl: (channelInfo as any)?.channelKey, 
           items: [],
           groupNames: []
         };
@@ -127,22 +145,12 @@ export const ExtensionManager: React.FC = () => {
     setExpandedItems(newSet);
   };
 
-  const tabs = [
-    { id: 'ALL', label: '전체', icon: Grid },
-    { id: 'PHONE', label: '전화번호', icon: Phone },
-    { id: 'LOCATION', label: '위치', icon: MapPin },
-    { id: 'SUB_LINKS', label: '서브링크', icon: LinkIcon },
-    { id: 'PRICE_LINKS', label: '가격', icon: Calculator },
-    { id: 'IMAGES', label: '이미지', icon: ImageIcon },
-    { id: 'WEBSITE_INFO', label: '웹사이트', icon: Globe },
-  ];
-
   const filteredList = activeTab === 'ALL' 
     ? groupedExtensions 
-    : groupedExtensions.filter(g => g.type === activeTab || (activeTab === 'IMAGES' && g.type.includes('IMAGE')));
+    : groupedExtensions.filter(g => g.type === activeTab || (activeTab === 'IMAGES' && (g.type === 'POWER_LINK_IMAGE' || g.type === 'IMAGE_SUB_LINKS')));
 
   const renderContent = (group: GroupedExtension) => {
-    const { type, content, businessChannelId, channelName } = group;
+    const { type, content, businessChannelId, channelName, channelUrl } = group;
     
     // 1. 비즈채널형
     if (businessChannelId) {
@@ -153,13 +161,20 @@ export const ExtensionManager: React.FC = () => {
                     <span className="font-bold text-gray-800">{channelName || businessChannelId}</span>
                 </div>
                 {/* 타입별 추가 정보 표시 */}
-                {type === 'PLACE' && <div className="text-xs text-gray-500"><MapPin className="w-3 h-3 inline mr-1"/>네이버 플레이스 연동</div>}
-                {type === 'WEBSITE_INFO' && <div className="text-xs text-gray-500"><Globe className="w-3 h-3 inline mr-1"/>웹사이트 정보 연동</div>}
+                {type === 'PLACE' && <div className="text-xs text-gray-500"><MapPin className="w-3 h-3 inline mr-1"/>플레이스 정보 연동</div>}
+                
+                {/* WEBSITE_INFO 처리 */}
+                {type === 'WEBSITE_INFO' && (
+                    <div className="text-xs text-gray-500 mt-1">
+                        <div className="flex items-center"><Globe className="w-3 h-3 inline mr-1"/>{channelUrl || 'URL 정보 없음'}</div>
+                        {content.agree !== undefined && <span className={content.agree ? 'text-green-600 ml-1' : 'text-red-500 ml-1'}>(동의: {content.agree ? 'Y' : 'N'})</span>}
+                    </div>
+                )}
             </div>
         );
     }
 
-    // 2. 직접 입력형
+    // 2. 직접 입력형 & 복합형
     switch (type) {
       case 'PHONE':
         return (
@@ -182,15 +197,38 @@ export const ExtensionManager: React.FC = () => {
              </div>
           </div>
         );
+      case 'POWER_LINK_IMAGE':
+        return (
+            <div className="flex items-center gap-3">
+                {content.imagePath ? (
+                    <img src={`https://ssl.pstatic.net/tveta/libs${content.imagePath}`} alt="파워링크" className="w-20 h-20 object-cover rounded border"/>
+                ) : (
+                    <div className="w-20 h-20 bg-gray-100 rounded border flex items-center justify-center text-gray-400 text-xs">No Image</div>
+                )}
+                <div className="text-xs text-gray-500">
+                    <div>파워링크 이미지</div>
+                    <div className="truncate w-32">{content.imagePath}</div>
+                </div>
+            </div>
+        );
+      case 'IMAGE_SUB_LINKS':
+        return (
+            <div>
+                <div className="font-bold text-sm mb-2 text-gray-700">이미지 서브링크 ({content.images?.length || 0}개)</div>
+                <div className="flex gap-2 overflow-x-auto pb-2">
+                    {content.images?.map((img: any, i: number) => (
+                        <div key={i} className="flex-shrink-0 w-16 text-center">
+                            <img src={`https://ssl.pstatic.net/tveta/libs${img.imageUrl}`} className="w-16 h-16 object-cover rounded border mb-1"/>
+                            <div className="text-[10px] truncate">{img.linkText}</div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        );
       default:
         return (
-          <div className="text-xs text-gray-500 bg-gray-50 p-2 rounded">
-            {Object.entries(content).map(([k, v]) => (
-              <div key={k} className="flex gap-2">
-                <span className="font-bold min-w-[80px]">{k}:</span>
-                <span className="truncate">{String(v)}</span>
-              </div>
-            ))}
+          <div className="text-xs text-gray-500 bg-gray-50 p-2 rounded break-all">
+            {JSON.stringify(content).slice(0, 100)}...
           </div>
         );
     }
@@ -228,7 +266,7 @@ export const ExtensionManager: React.FC = () => {
       {selectedCampaignId ? (
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden flex flex-col flex-1 min-h-0">
           <div className="flex border-b overflow-x-auto scrollbar-hide bg-gray-50">
-            {tabs.map(tab => (
+            {dynamicTabs.map(tab => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
@@ -304,7 +342,7 @@ export const ExtensionManager: React.FC = () => {
             ) : (
               <div className="flex flex-col items-center justify-center h-full text-gray-400 border-2 border-dashed border-gray-300 rounded-xl bg-white/50">
                 <AlertCircle className="w-12 h-12 mb-3 opacity-30"/>
-                <p className="font-medium">등록된 '{tabs.find(t=>t.id===activeTab)?.label}' 확장소재가 없습니다.</p>
+                <p className="font-medium">이 캠페인에는 해당 유형의 확장소재가 없습니다.</p>
               </div>
             )}
           </div>

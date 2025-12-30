@@ -18,7 +18,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# [안전장치] 출력 인코딩 강제 설정
+# [안전장치] 출력 인코딩
 try:
     if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8')
@@ -181,34 +181,24 @@ def format_stats(stat_item):
     }
 
 def normalize_type(raw_type: str) -> str:
-    t = raw_type.upper()
-    if 'SUB' in t or 'LINK' in t:
-        if 'BLOG' not in t and 'URL' not in t and 'IMAGE' not in t: return 'ADDITIONAL_LINK'
-    if 'PHONE' in t: return 'PHONE_NUMBER'
-    if 'LOC' in t or 'PLACE' in t: return 'PLACE'
-    if 'URL' in t: return 'URL'
-    if 'IMG' in t or 'IMAGE' in t: return 'MOBILE_IMAGE'
-    if 'TITLE' in t: return 'ADDITIONAL_TITLE'
-    if 'PROMO' in t: return 'PROMOTION_TEXT'
-    if 'BLOG' in t or 'CAFE' in t: return 'BLOG'
-    return t
+    return raw_type.upper()
 
-# [수정됨] 소재(Ad) 데이터 정제: 이중 포장 뜯기
+# [★핵심] JSON 파싱 안전 함수
+def safe_json_parse(data):
+    if data is None: return {}
+    if isinstance(data, dict): return data
+    if isinstance(data, str):
+        try:
+            return json.loads(data)
+        except:
+            return {}
+    return {}
+
+# [수정됨] 소재 데이터 정제
 def convert_ads(ad_list):
     result = []
     for ad in ad_list:
-        raw_details = ad.get('ad')
-        details = {}
-        
-        # 1. 만약 details가 문자열(JSON String)이면 파싱
-        if isinstance(raw_details, str):
-            try:
-                details = json.loads(raw_details)
-            except:
-                details = {}
-        elif isinstance(raw_details, dict):
-            details = raw_details
-            
+        details = safe_json_parse(ad.get('ad'))
         result.append({
             "nccAdId": ad['nccAdId'], 
             "nccAdGroupId": ad['nccAdgroupId'], 
@@ -219,20 +209,9 @@ def convert_ads(ad_list):
         })
     return result
 
-# [수정됨] 확장소재 데이터 정제: 이중 포장 뜯기
+# [수정됨] 확장소재 데이터 정제
 def format_extension(ext):
-    content_str = ext.get('adExtension')
-    content = {}
-    if content_str:
-        if isinstance(content_str, str):
-            try:
-                content = json.loads(content_str)
-            except:
-                content = {}
-        elif isinstance(content_str, dict):
-            content = content_str
-    
-    ext['extension'] = content
+    ext['extension'] = safe_json_parse(ext.get('adExtension'))
     return ext
 
 # --- 방문자 추적 및 로그 시스템 ---
@@ -470,7 +449,6 @@ def get_extensions(
     auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
     all_exts = []
     
-    # 1. 특정 그룹만 조회
     if adgroup_id:
         res = call_api_sync(("GET", "/ncc/ad-extensions", {'ownerId': adgroup_id}, None, auth))
         if res:
@@ -478,7 +456,6 @@ def get_extensions(
                 all_exts.append(format_extension(ext))
         return all_exts
 
-    # 2. 캠페인 전체 조회
     if campaign_id:
         groups = call_api_sync(("GET", "/ncc/adgroups", {'nccCampaignId': campaign_id}, None, auth))
         if not groups: return []
