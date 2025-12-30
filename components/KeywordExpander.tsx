@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Campaign, AdGroup } from '../types';
 import { naverService } from '../services/naverService';
-import { Filter, Layers, Loader2, CheckCircle, List, FileText, Copy, PlusCircle } from 'lucide-react';
+import { Filter, Layers, Loader2, CheckCircle, List, FileText, Copy, PlusCircle, AlertTriangle } from 'lucide-react';
 
 interface Props {
     campaigns: Campaign[];
@@ -17,7 +17,7 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [resultLog, setResultLog] = useState<string[]>([]);
     
-    // [NEW] 생성된 그룹 알림용
+    // 생성된 그룹 알림용
     const [createdGroupLog, setCreatedGroupLog] = useState<string[]>([]);
 
     // --- Simple Mode 상태 ---
@@ -131,35 +131,46 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
         alert(msg);
     };
 
-    // [핵심] 그룹 복제 및 설정 복사
+    // [★핵심] 그룹의 소재와 확장소재를 새 그룹으로 복사하는 함수
     const copyGroupSettings = async (sourceGroupId: string, targetGroupId: string) => {
+        setResultLog(prev => [`♻️ 원본 그룹(${sourceGroupId})의 세팅을 복사합니다...`, ...prev]);
+        
         try {
             // 1. 소재(Ad) 복사
             const sourceAds = await naverService.getAds(undefined, sourceGroupId);
+            let adCount = 0;
             for (const ad of sourceAds) {
-                await naverService.createAd(targetGroupId, ad.headline, ad.description);
+                // 원본 소재 내용을 바탕으로 새 소재 생성
+                try {
+                    await naverService.createAd(targetGroupId, ad.headline, ad.description);
+                    adCount++;
+                } catch (e) {
+                    console.error("소재 복사 실패:", e);
+                }
             }
+            setResultLog(prev => [`  L 소재 ${adCount}개 복사 완료`, ...prev]);
 
             // 2. 확장소재(Extensions) 복사
-            try {
-                // [NEW] 그룹별 조회로 빠르고 안전하게 가져오기
-                const sourceExts = await naverService.getExtensionsByGroup(sourceGroupId);
-                for (const ext of sourceExts) {
-                    if (ext.nccBusinessChannelId) {
-                        // 전화번호, 위치 등 비즈채널형
-                        await naverService.createExtension(targetGroupId, ext.type, ext.nccBusinessChannelId, undefined);
-                    } else if (ext.extension) {
-                        // 추가링크 등 일반형
-                        await naverService.createExtension(targetGroupId, ext.type, undefined, ext.extension);
-                    }
+            // 서버에 구현된 '그룹별 확장소재 조회' 기능 사용
+            const sourceExts = await naverService.getExtensionsByGroup(sourceGroupId);
+            let extCount = 0;
+            for (const ext of sourceExts) {
+                try {
+                    // 비즈채널형인지 일반형인지 구분하여 파라미터 구성
+                    const businessChannelId = ext.pcChannelId || ext.mobileChannelId || undefined;
+                    const attributes = ext.extension || {}; // 파싱된 JSON 객체 그대로 사용
+
+                    await naverService.createExtension(targetGroupId, ext.type, businessChannelId, attributes);
+                    extCount++;
+                } catch (e) {
+                    console.error(`확장소재(${ext.type}) 복사 실패:`, e);
                 }
-            } catch(e) {
-                console.error("확장소재 복사 실패:", e);
-                // 확장소재 실패해도 그룹 생성은 계속 진행
             }
+            setResultLog(prev => [`  L 확장소재 ${extCount}개 복사 완료`, ...prev]);
 
         } catch (e) {
-            console.error("복사 중 오류:", e);
+            console.error("그룹 세팅 복사 중 치명적 오류:", e);
+            setResultLog(prev => [`❌ 그룹 복사 실패: ${e}`, ...prev]);
         }
     };
 
@@ -168,7 +179,6 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
         const MAX_LIMIT = 1000;
         
         // 1. 현재 그룹의 키워드 개수 확인
-        // 주의: getKeywords는 전체를 가져오므로 느릴 수 있음. 최적화 필요하지만 정확도를 위해 호출
         const currentKwds = await naverService.getKeywords(task.groupId, 'MOBILE', 3);
         const currentCount = currentKwds.length;
         const remainingSpace = Math.max(0, MAX_LIMIT - currentCount);
@@ -197,25 +207,25 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
 
             // 새 그룹 이름 결정 (중복 피하기)
             let newGroupName = `${task.groupName}_${suffix}`;
-            // 이미 존재하는지 이름으로 체크 (adGroups 상태 활용)
-            // (실시간 동기화가 안 될 수 있으므로 API 에러나면 _2, _3 시도하는게 맞으나 단순화)
             while (adGroups.find(g => g.name === newGroupName)) {
                 suffix++;
                 newGroupName = `${task.groupName}_${suffix}`;
             }
 
             try {
-                // 그룹 생성 API 호출
+                // (1) 새 그룹 생성
                 const newGroup = await naverService.createAdGroup(selectedCampaign, newGroupName);
+                setCreatedGroupLog(prev => [`✨ 그룹 생성: ${newGroupName}`, ...prev]);
                 
-                // [중요] 소재 및 설정 복사
+                // (2) [★중요] 원본 그룹의 소재/확장소재 복사
                 await copyGroupSettings(task.groupId, newGroup.nccAdGroupId);
 
+                // (3) 작업 목록에 추가
                 results.push({ groupId: newGroup.nccAdGroupId, groupName: newGroup.name, keywords: chunk });
-                setCreatedGroupLog(prev => [...prev, `✨ 그룹 생성: ${newGroupName} (ID: ${newGroup.nccAdGroupId})`]);
+                
             } catch (e) {
                 setResultLog(prev => [`❌ 그룹 생성 실패 (${newGroupName}): ${e}`, ...prev]);
-                break; // 생성 실패하면 중단
+                break; 
             }
             suffix++;
         }
@@ -250,7 +260,7 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
                 const res = await naverService.createKeywordsBulk(batch);
                 const success = res ? res.filter((r: any) => r.status === 'success').length : 0;
                 successTotal += success;
-                setResultLog(prev => [`등록 ${i}~${i+chunkSize}: ${success}개 완료`, ...prev.slice(0, 4)]);
+                setResultLog(prev => [`키워드 등록 ${i}~${i+chunkSize}: ${success}개 완료`, ...prev.slice(0, 4)]);
             } catch (e) {
                 console.error(e);
                 setResultLog(prev => [`등록 ${i} 구간 에러`, ...prev]);
@@ -264,7 +274,7 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
             setAdGroups(groups);
         } catch(e) {}
         
-        alert(`완료! 총 ${successTotal}개 키워드 등록.\n새로 생성된 그룹이 있다면 아래 로그를 확인하세요.`);
+        alert(`완료! 총 ${successTotal}개 키워드 등록.\n새로 생성된 그룹이 있다면 로그를 확인하세요.`);
     };
 
     const handleSubmitSimple = async () => {
@@ -285,7 +295,7 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
         if (!result || result.tasks.length === 0) { alert("매칭된 작업이 없습니다."); return; }
 
         const totalKwd = result.tasks.reduce((sum, t) => sum + t.keywords.length, 0);
-        if (!confirm(`총 ${result.tasks.length}개 그룹에 ${totalKwd}개 키워드 등록을 시도합니다.\n(꽉 찬 그룹은 자동으로 새 그룹을 생성합니다)`)) return;
+        if (!confirm(`총 ${result.tasks.length}개 그룹에 ${totalKwd}개 키워드 등록을 시도합니다.\n(꽉 찬 그룹은 자동으로 새 그룹을 생성하고 소재를 복사합니다)`)) return;
 
         await executeSubmit(result.tasks);
     };
@@ -382,7 +392,7 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
                             스마트 일괄 등록 (자동 확장)
                         </button>
 
-                        {/* 생성된 그룹 로그 표시 */}
+                        {/* 로그 표시 영역 */}
                         {(createdGroupLog.length > 0 || resultLog.length > 0) && (
                             <div className="bg-gray-900 text-xs p-3 rounded h-32 overflow-y-auto font-mono">
                                 {createdGroupLog.map((log, i) => <div key={`g-${i}`} className="text-yellow-400 mb-1">{log}</div>)}

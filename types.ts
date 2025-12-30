@@ -1,3 +1,5 @@
+// types.ts (기존 코드 유지 + 새 기능 병합 완료)
+
 export interface Campaign {
   nccCampaignId: string;
   campaignType: string;
@@ -25,11 +27,12 @@ export interface Keyword {
   nccAdGroupId: string;
   keyword: string;
   bidAmt: number;
+  originalBid?: number; 
   useGroupBidAmt: boolean;
   status: Status | string;
   managedStatus: string;
   stats: PerformanceStats;
-  currentRankEstimate: number;
+  currentRankEstimate?: number; // ? 추가 (선택적)
   bidEstimates?: EstimateItem[];
 }
 
@@ -63,7 +66,7 @@ export interface VisitLog {
   referrer: string;
 }
 
-// [추가됨] 소재 인터페이스
+// [수정됨] 소재 인터페이스 (URL 필드 추가)
 export interface Ad {
   nccAdId: string;
   nccAdGroupId: string;
@@ -71,9 +74,12 @@ export interface Ad {
   headline: string;
   description: string;
   status: boolean;
+  // [NEW] 에러 해결을 위해 추가된 필드
+  pcUrl?: string;
+  mobileUrl?: string;
 }
 
-// [수정됨] 비즈채널 인터페이스 (중복 제거)
+// [수정됨] 비즈채널 인터페이스
 export interface BusinessChannel {
   nccBusinessChannelId: string;
   name: string;
@@ -81,12 +87,18 @@ export interface BusinessChannel {
   type: string;
 }
 
-// [추가됨] 확장소재 인터페이스
+// [수정됨] 확장소재 인터페이스 (구조 구체화)
 export interface Extension {
-  nccAdGroupId?: string;
+  nccExtensionId?: string; // 조회 시에만 존재
+  ownerId: string; // 그룹 ID or 캠페인 ID (기존 nccAdGroupId 대체/혼용)
   type: string;
-  extension?: any;
-  [key: string]: any; 
+  pcChannelId?: string;
+  mobileChannelId?: string;
+  extension?: any; // JSON 파싱된 내용
+  userLock?: boolean;
+  inspectStatus?: string; // 검수 상태
+  statusReason?: string;  // 반려 사유
+  [key: string]: any; // 유연성을 위해 인덱스 시그니처 유지
 }
 
 export enum Status {

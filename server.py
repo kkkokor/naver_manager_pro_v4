@@ -51,6 +51,9 @@ class AdCreateItem(BaseModel):
     adGroupId: str
     headline: str
     description: str
+    # [NEW] URL 필드 추가
+    pcUrl: Optional[str] = None
+    mobileUrl: Optional[str] = None
 
 class ExtensionCreateItem(BaseModel):
     adGroupId: str
@@ -183,7 +186,6 @@ def format_stats(stat_item):
 def normalize_type(raw_type: str) -> str:
     return raw_type.upper()
 
-# [★핵심] JSON 파싱 안전 함수
 def safe_json_parse(data):
     if data is None: return {}
     if isinstance(data, dict): return data
@@ -194,7 +196,7 @@ def safe_json_parse(data):
             return {}
     return {}
 
-# [수정됨] 소재 데이터 정제
+# [수정됨] 소재 데이터 정제 (URL 정보 포함)
 def convert_ads(ad_list):
     result = []
     for ad in ad_list:
@@ -205,6 +207,8 @@ def convert_ads(ad_list):
             "type": ad.get('type', 'TEXT'),
             "headline": details.get('headline', '-'), 
             "description": details.get('description', '-'),
+            "pcUrl": details.get('pcUrl', ''),      # [NEW]
+            "mobileUrl": details.get('mobileUrl', ''), # [NEW]
             "status": ad.get('userLock', False)
         })
     return result
@@ -332,9 +336,15 @@ def create_adgroup(
 ):
     auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
     body = {"nccCampaignId": item.nccCampaignId, "name": item.name}
-    res = call_api_sync(("POST", "/ncc/adgroups", None, json.dumps([body]), auth))
-    if res and isinstance(res, list) and len(res) > 0: return res[0] 
-    elif res and 'nccAdgroupId' in res: return res
+    
+    # [수정] json.dumps 제거 -> body 딕셔너리 그대로 전달 (배열 포장도 제거)
+    res = call_api_sync(("POST", "/ncc/adgroups", None, body, auth))
+    
+    if res and isinstance(res, list) and len(res) > 0:
+        return res[0] 
+    elif res and 'nccAdgroupId' in res:
+        return res
+    
     raise HTTPException(status_code=400, detail="그룹 생성 실패")
 
 @app.get("/api/keywords")
@@ -409,12 +419,37 @@ def get_ads(campaign_id: Optional[str] = None, adgroup_id: Optional[str] = None,
         return convert_ads(all_ads)
     return []
 
+# [1] 소재(Ad) 생성 API 수정 (JSON 객체로 전송)
 @app.post("/api/ads")
 def create_ad(item: AdCreateItem, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
     auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
-    body = {"type": "TEXT", "nccAdgroupId": item.adGroupId, "ad": { "headline": item.headline, "description": item.description }}
-    res = call_api_sync(("POST", "/ncc/ads", None, json.dumps([body]), auth))
+    
+    # 1. 소재 내용은 딕셔너리(객체)로 만듦
+    ad_content = {
+        "headline": item.headline,
+        "description": item.description
+    }
+    # URL이 있는 경우에만 추가 (빈 문자열이면 보내지 않음)
+    if item.pcUrl and item.pcUrl.strip(): 
+        ad_content["pcUrl"] = item.pcUrl
+    if item.mobileUrl and item.mobileUrl.strip(): 
+        ad_content["mobileUrl"] = item.mobileUrl
+    
+    # 2. [수정] 'ad' 필드는 문자열이 아니라 '객체(Dict)'여야 함!
+    # API가 내부적으로 이를 JSON 구조로 인식함.
+    body = {
+        "type": "TEXT", 
+        "nccAdgroupId": item.adGroupId, 
+        "ad": ad_content  # json.dumps() 제거 -> 객체 그대로 전달
+    }
+    
+    # 3. 전체 Body는 딕셔너리 그대로 전달
+    res = call_api_sync(("POST", "/ncc/ads", None, body, auth))
+    
     if res: return res
+    
+    # 실패 시 로그 출력
+    print(f"[Create Ad Failed] Body: {json.dumps(body, ensure_ascii=False)}")
     raise HTTPException(status_code=400, detail="Failed to create ad")
 
 @app.delete("/api/ads/{ad_id}")
@@ -471,21 +506,60 @@ def get_extensions(
     
     return []
 
+# [2] 확장소재 생성 API 수정 (타입별 데이터 정제 로직 추가)
 @app.post("/api/extensions")
 def create_extension(item: ExtensionCreateItem, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
     auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
     
     body = { "ownerId": item.adGroupId, "type": item.type }
-    content_dict = item.attributes or {}
     
+    # [핵심] 타입별로 꼭 필요한 데이터만 남기고 나머지는 버리는 정제(Cleaning) 로직
+    raw_attrs = item.attributes or {}
+    clean_attrs = {}
+
+    ext_type = item.type.upper()
+
+    if ext_type == "PHONE" or ext_type == "PLACE" or ext_type == "LOCATION":
+        # 전화번호, 위치는 본문(adExtension)이 비어있어야 함. 정보는 channelId로 연동.
+        clean_attrs = {} 
+        
+    elif ext_type == "WEBSITE_INFO":
+        # 웹사이트 정보는 동의 여부 필수
+        clean_attrs = {"agree": True}
+        
+    elif ext_type == "SUB_LINKS":
+        # 서브링크는 링크 리스트만 가져감 (검수 상태 등 제거)
+        if "links" in raw_attrs:
+            clean_attrs["links"] = raw_attrs["links"]
+            
+    elif ext_type == "IMAGE_SUB_LINKS":
+        if "images" in raw_attrs:
+            clean_attrs["images"] = raw_attrs["images"]
+            
+    elif ext_type == "POWER_LINK_IMAGE":
+        if "imagePath" in raw_attrs:
+            clean_attrs["imagePath"] = raw_attrs["imagePath"]
+            
+    else:
+        # 그 외 타입은 원본 유지하되, 위험한 시스템 필드는 제거 시도
+        clean_attrs = raw_attrs.copy()
+        for key in ['inspectStatus', 'status', 'regTm', 'editTm', 'nccAdExtensionId']:
+            clean_attrs.pop(key, None)
+
+    # 비즈채널 ID 설정
     if item.businessChannelId:
         body["pcChannelId"] = item.businessChannelId
         body["mobileChannelId"] = item.businessChannelId
     
-    body["adExtension"] = json.dumps(content_dict)
+    # [수정] adExtension은 'JSON 문자열'이어야 하지만, 내용은 정제된 clean_attrs를 사용
+    body["adExtension"] = json.dumps(clean_attrs)
 
-    res = call_api_sync(("POST", "/ncc/ad-extensions", None, json.dumps([body]), auth))
+    # 전체 Body 전송
+    res = call_api_sync(("POST", "/ncc/ad-extensions", None, body, auth))
+    
     if res: return res
+    
+    print(f"[Create Ext Failed] Body: {json.dumps(body, ensure_ascii=False)}")
     raise HTTPException(status_code=400, detail="Failed to create extension")
 
 @app.delete("/api/extensions")

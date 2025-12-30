@@ -1,10 +1,12 @@
+// components/ExtensionManager.tsx 전체 덮어쓰기
+
 import React, { useState, useEffect } from 'react';
 import { naverService } from '../services/naverService';
 import { Extension, Campaign, AdGroup, BusinessChannel } from '../types';
 import { 
   Phone, MapPin, Link as LinkIcon, Image as ImageIcon, 
-  Grid, Loader2, RefreshCw, AlertCircle, PhoneCall, Globe, Calculator, AlertTriangle, 
-  ChevronDown, ChevronUp, Layers, ExternalLink
+  Grid, Loader2, RefreshCw, AlertCircle, PhoneCall, Globe, Calculator, 
+  ChevronDown, ChevronUp, Layers, ExternalLink, Copy, CheckSquare
 } from 'lucide-react';
 
 interface GroupedExtension {
@@ -12,10 +14,11 @@ interface GroupedExtension {
   type: string;
   content: any; 
   businessChannelId?: string;
-  channelName?: string; // 채널 이름
-  channelUrl?: string; // 채널 URL
+  channelName?: string;
+  channelUrl?: string;
   items: Extension[]; 
-  groupNames: string[]; 
+  ownerIds: string[]; // 사용 중인 그룹 ID들
+  groupNames: string[]; // 사용 중인 그룹 이름들
 }
 
 export const ExtensionManager: React.FC = () => {
@@ -28,11 +31,12 @@ export const ExtensionManager: React.FC = () => {
   const [groupedExtensions, setGroupedExtensions] = useState<GroupedExtension[]>([]);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<string>('ALL');
-  
-  // 동적으로 생성될 탭 목록
   const [dynamicTabs, setDynamicTabs] = useState<{id: string, label: string, icon: any}[]>([]);
   
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
+  
+  const [selectedTargets, setSelectedTargets] = useState<Record<string, Set<string>>>({});
+  const [isCopying, setIsCopying] = useState(false);
 
   useEffect(() => {
     loadCampaigns();
@@ -66,36 +70,28 @@ export const ExtensionManager: React.FC = () => {
   const loadData = async (campaignId: string) => {
     setLoading(true);
     try {
-      // 1. 그룹 목록 (매핑용)
       const groups = await naverService.getAdGroups(campaignId);
       setAdGroups(groups);
       const groupMap: Record<string, string> = {};
       groups.forEach(g => groupMap[g.nccAdGroupId] = g.name);
 
-      // 2. 비즈채널 맵 생성
       const channelMap: Record<string, BusinessChannel> = {};
       channels.forEach(ch => channelMap[ch.nccBusinessChannelId] = ch);
 
-      // 3. 확장소재 가져오기
       const exts = await naverService.getExtensions(campaignId);
-      
-      // 4. 그룹화
       const grouped = groupExtensions(exts, groupMap, channelMap);
       setGroupedExtensions(grouped);
 
-      // 5. 탭 생성 logic: 데이터에 존재하는 타입만 탭으로 만듦
       const types = new Set(grouped.map(g => g.type));
       const newTabs = [{ id: 'ALL', label: '전체', icon: Grid }];
-      
       if (types.has('PHONE')) newTabs.push({ id: 'PHONE', label: '전화번호', icon: Phone });
       if (types.has('LOCATION') || types.has('PLACE')) newTabs.push({ id: 'LOCATION', label: '위치', icon: MapPin });
       if (types.has('SUB_LINKS')) newTabs.push({ id: 'SUB_LINKS', label: '서브링크', icon: LinkIcon });
       if (types.has('WEBSITE_INFO')) newTabs.push({ id: 'WEBSITE_INFO', label: '웹사이트', icon: Globe });
       if (types.has('POWER_LINK_IMAGE') || types.has('IMAGE_SUB_LINKS')) newTabs.push({ id: 'IMAGES', label: '이미지', icon: ImageIcon });
       
-      // 기타 타입이 있으면 '기타' 탭 추가 가능, 일단은 여기까지
       setDynamicTabs(newTabs);
-      setActiveTab('ALL'); // 리셋
+      if (!types.has(activeTab) && activeTab !== 'ALL' && activeTab !== 'IMAGES') setActiveTab('ALL');
 
     } catch (error) {
       console.error("데이터 로딩 실패:", error);
@@ -110,12 +106,8 @@ export const ExtensionManager: React.FC = () => {
     extensions.forEach(ext => {
       const contentKey = JSON.stringify(ext.extension || {});
       const channelId = ext.pcChannelId || ext.mobileChannelId || '';
-      
-      // 비즈채널 정보 찾기
       const channelInfo = channelId ? channelMap[channelId] : undefined;
-      const channelKey = channelId; 
-
-      const uniqueKey = `${ext.type}|${contentKey}|${channelKey}`;
+      const uniqueKey = `${ext.type}|${contentKey}|${channelId}`;
 
       if (!groups[uniqueKey]) {
         groups[uniqueKey] = {
@@ -126,11 +118,13 @@ export const ExtensionManager: React.FC = () => {
           channelName: channelInfo?.name,
           channelUrl: (channelInfo as any)?.channelKey, 
           items: [],
+          ownerIds: [],
           groupNames: []
         };
       }
 
       groups[uniqueKey].items.push(ext);
+      groups[uniqueKey].ownerIds.push(ext.ownerId);
       const groupName = groupMap[ext.ownerId] || ext.ownerId || '알 수 없는 그룹';
       groups[uniqueKey].groupNames.push(groupName);
     });
@@ -145,6 +139,61 @@ export const ExtensionManager: React.FC = () => {
     setExpandedItems(newSet);
   };
 
+  const toggleTarget = (extGroupId: string, targetGroupId: string) => {
+    const currentSet = new Set(selectedTargets[extGroupId] || []);
+    if (currentSet.has(targetGroupId)) currentSet.delete(targetGroupId);
+    else currentSet.add(targetGroupId);
+    
+    setSelectedTargets({ ...selectedTargets, [extGroupId]: currentSet });
+  };
+
+  const toggleAllTargets = (extGroupId: string, allTargetIds: string[]) => {
+    const currentSet = new Set(selectedTargets[extGroupId] || []);
+    if (currentSet.size === allTargetIds.length) {
+        setSelectedTargets({ ...selectedTargets, [extGroupId]: new Set() });
+    } else {
+        setSelectedTargets({ ...selectedTargets, [extGroupId]: new Set(allTargetIds) });
+    }
+  };
+
+  const handleCopyExtensions = async (group: GroupedExtension) => {
+    const targets = selectedTargets[group.id];
+    if (!targets || targets.size === 0) {
+        alert("복사할 대상 그룹을 선택해주세요.");
+        return;
+    }
+
+    if (!confirm(`선택한 ${targets.size}개 그룹에 이 확장소재를 복사하시겠습니까?`)) return;
+
+    setIsCopying(true);
+    let successCount = 0;
+    
+    try {
+        for (const targetGroupId of Array.from(targets)) {
+            try {
+                await naverService.createExtension(
+                    targetGroupId, 
+                    group.type, 
+                    group.businessChannelId, 
+                    group.content
+                );
+                successCount++;
+            } catch (e) {
+                console.error(`그룹(${targetGroupId}) 복사 실패:`, e);
+            }
+        }
+        alert(`${successCount}개 그룹에 복사 완료!`);
+        
+        setSelectedTargets({ ...selectedTargets, [group.id]: new Set() });
+        loadData(selectedCampaignId);
+
+    } catch (e) {
+        alert("작업 중 오류가 발생했습니다.");
+    } finally {
+        setIsCopying(false);
+    }
+  };
+
   const filteredList = activeTab === 'ALL' 
     ? groupedExtensions 
     : groupedExtensions.filter(g => g.type === activeTab || (activeTab === 'IMAGES' && (g.type === 'POWER_LINK_IMAGE' || g.type === 'IMAGE_SUB_LINKS')));
@@ -152,7 +201,6 @@ export const ExtensionManager: React.FC = () => {
   const renderContent = (group: GroupedExtension) => {
     const { type, content, businessChannelId, channelName, channelUrl } = group;
     
-    // 1. 비즈채널형
     if (businessChannelId) {
         return (
             <div className="text-sm">
@@ -160,10 +208,7 @@ export const ExtensionManager: React.FC = () => {
                     <span className="bg-blue-100 text-blue-800 text-[10px] px-2 py-0.5 rounded font-bold">비즈채널</span>
                     <span className="font-bold text-gray-800">{channelName || businessChannelId}</span>
                 </div>
-                {/* 타입별 추가 정보 표시 */}
                 {type === 'PLACE' && <div className="text-xs text-gray-500"><MapPin className="w-3 h-3 inline mr-1"/>플레이스 정보 연동</div>}
-                
-                {/* WEBSITE_INFO 처리 */}
                 {type === 'WEBSITE_INFO' && (
                     <div className="text-xs text-gray-500 mt-1">
                         <div className="flex items-center"><Globe className="w-3 h-3 inline mr-1"/>{channelUrl || 'URL 정보 없음'}</div>
@@ -174,7 +219,6 @@ export const ExtensionManager: React.FC = () => {
         );
     }
 
-    // 2. 직접 입력형 & 복합형
     switch (type) {
       case 'PHONE':
         return (
@@ -239,7 +283,7 @@ export const ExtensionManager: React.FC = () => {
       <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-200 flex-shrink-0">
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-2xl font-bold text-gray-800 flex items-center">
-             <Layers className="w-7 h-7 mr-2 text-indigo-600"/> 확장소재 통합 관리
+             <Layers className="w-7 h-7 mr-2 text-indigo-600"/> 확장소재 배포 관리
           </h2>
         </div>
         
@@ -286,16 +330,20 @@ export const ExtensionManager: React.FC = () => {
             {loading ? (
               <div className="flex flex-col items-center justify-center h-full text-gray-400">
                 <Loader2 className="w-10 h-10 animate-spin mb-3 text-indigo-400"/>
-                <p>소재를 분석하고 그룹화하는 중입니다...</p>
+                <p>데이터를 분석 중입니다...</p>
               </div>
             ) : filteredList.length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {filteredList.map((group) => {
                   const isExpanded = expandedItems.has(group.id);
                   const sampleStatus = group.items[0]?.inspectStatus;
+                  
+                  const usedGroupIds = new Set(group.ownerIds);
+                  const unusedGroups = adGroups.filter(g => !usedGroupIds.has(g.nccAdGroupId));
+                  const selectedSet = selectedTargets[group.id] || new Set();
 
                   return (
-                    <div key={group.id} className="bg-white p-4 rounded-xl border border-gray-200 hover:shadow-lg transition-all flex flex-col">
+                    <div key={group.id} className={`bg-white p-4 rounded-xl border transition-all flex flex-col ${isExpanded ? 'border-indigo-300 shadow-md ring-1 ring-indigo-100' : 'border-gray-200 hover:shadow-lg'}`}>
                       <div className="flex justify-between items-start mb-3">
                         <div className="flex gap-2">
                           <span className="bg-indigo-50 text-indigo-600 text-[10px] px-2 py-1 rounded-md font-bold uppercase tracking-wide">
@@ -307,8 +355,8 @@ export const ExtensionManager: React.FC = () => {
                             </span>
                           )}
                         </div>
-                        <span className="text-xs font-bold text-gray-500 bg-gray-100 px-2 py-1 rounded-full">
-                          총 {group.items.length}개 그룹 사용
+                        <span className={`text-xs font-bold px-2 py-1 rounded-full ${unusedGroups.length > 0 ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
+                          {unusedGroups.length > 0 ? `${unusedGroups.length}개 그룹 미사용` : '모든 그룹 사용중'}
                         </span>
                       </div>
 
@@ -319,19 +367,63 @@ export const ExtensionManager: React.FC = () => {
                       <div className="border-t pt-2 mt-auto">
                         <button 
                           onClick={() => toggleExpand(group.id)}
-                          className="w-full flex justify-between items-center text-xs text-gray-500 hover:bg-gray-50 p-2 rounded transition-colors"
+                          className="w-full flex justify-between items-center text-xs font-bold text-gray-500 hover:bg-gray-50 p-2 rounded transition-colors"
                         >
-                          <span>사용 중인 그룹 보기 ({group.groupNames.length})</span>
+                          <span>{isExpanded ? '접기' : '배포 관리 / 그룹 보기'}</span>
                           {isExpanded ? <ChevronUp className="w-4 h-4"/> : <ChevronDown className="w-4 h-4"/>}
                         </button>
                         
                         {isExpanded && (
-                          <div className="mt-2 bg-gray-50 rounded p-2 max-h-40 overflow-y-auto border border-gray-100">
-                            {group.groupNames.map((name, idx) => (
-                              <div key={idx} className="text-xs text-gray-600 py-1 border-b border-gray-100 last:border-0 truncate" title={name}>
-                                {name}
-                              </div>
-                            ))}
+                          <div className="mt-3 space-y-4 animate-fadeIn">
+                            {unusedGroups.length > 0 && (
+                                <div className="bg-red-50 rounded-lg p-3 border border-red-100">
+                                    <div className="flex justify-between items-center mb-2">
+                                        <div className="text-xs font-bold text-red-700 flex items-center">
+                                            <AlertCircle className="w-3 h-3 mr-1"/> 미사용 그룹 ({unusedGroups.length})
+                                        </div>
+                                        <button 
+                                            onClick={() => toggleAllTargets(group.id, unusedGroups.map(g => g.nccAdGroupId))}
+                                            className="text-[10px] text-red-500 underline"
+                                        >
+                                            {selectedSet.size === unusedGroups.length ? '전체 해제' : '전체 선택'}
+                                        </button>
+                                    </div>
+                                    <div className="max-h-32 overflow-y-auto pr-1 space-y-1 scrollbar-thin">
+                                        {unusedGroups.map(g => (
+                                            <label key={g.nccAdGroupId} className="flex items-center p-1.5 bg-white rounded border border-red-100 cursor-pointer hover:bg-red-50 transition-colors">
+                                                <input 
+                                                    type="checkbox" 
+                                                    checked={selectedSet.has(g.nccAdGroupId)}
+                                                    onChange={() => toggleTarget(group.id, g.nccAdGroupId)}
+                                                    className="rounded border-gray-300 text-red-600 focus:ring-red-500 mr-2"
+                                                />
+                                                <span className="text-xs text-gray-700 truncate">{g.name}</span>
+                                            </label>
+                                        ))}
+                                    </div>
+                                    <button 
+                                        onClick={() => handleCopyExtensions(group)}
+                                        disabled={selectedSet.size === 0 || isCopying}
+                                        className="w-full mt-2 bg-red-600 text-white text-xs py-2 rounded font-bold hover:bg-red-700 disabled:bg-gray-300 disabled:cursor-not-allowed flex justify-center items-center gap-1"
+                                    >
+                                        {isCopying ? <Loader2 className="w-3 h-3 animate-spin"/> : <Copy className="w-3 h-3"/>}
+                                        선택한 {selectedSet.size}개 그룹에 복사
+                                    </button>
+                                </div>
+                            )}
+
+                            <div className="bg-gray-50 rounded-lg p-3 border border-gray-100">
+                                <div className="text-xs font-bold text-gray-500 mb-2 flex items-center">
+                                    <CheckSquare className="w-3 h-3 mr-1"/> 사용 중인 그룹 ({group.groupNames.length})
+                                </div>
+                                <div className="max-h-20 overflow-y-auto pr-1 space-y-1 scrollbar-thin">
+                                    {group.groupNames.map((name, idx) => (
+                                        <div key={idx} className="text-xs text-gray-500 py-1 px-2 bg-white rounded border border-gray-100 truncate">
+                                            {name}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
                           </div>
                         )}
                       </div>
@@ -342,7 +434,8 @@ export const ExtensionManager: React.FC = () => {
             ) : (
               <div className="flex flex-col items-center justify-center h-full text-gray-400 border-2 border-dashed border-gray-300 rounded-xl bg-white/50">
                 <AlertCircle className="w-12 h-12 mb-3 opacity-30"/>
-                <p className="font-medium">이 캠페인에는 해당 유형의 확장소재가 없습니다.</p>
+                {/* [수정] tabs -> dynamicTabs로 변경 */}
+                <p className="font-medium">등록된 '{dynamicTabs.find(t=>t.id===activeTab)?.label}' 확장소재가 없습니다.</p>
               </div>
             )}
           </div>

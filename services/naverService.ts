@@ -92,8 +92,8 @@ export const naverService = {
     return res.json();
   },
 
-  // 소재 생성
-  async createAd(adGroupId: string, headline: string, description: string) {
+  // [수정] 소재 생성 (URL 포함)
+  async createAd(adGroupId: string, headline: string, description: string, pcUrl?: string, mobileUrl?: string) {
     const res = await fetch(`${API_BASE_URL}/api/ads`, {
       method: 'POST',
       headers: {
@@ -102,7 +102,7 @@ export const naverService = {
         'x-naver-secret-key': localStorage.getItem('naver_secret_key') || '',
         'x-naver-customer-id': localStorage.getItem('naver_customer_id') || '',
       },
-      body: JSON.stringify({ adGroupId, headline, description }),
+      body: JSON.stringify({ adGroupId, headline, description, pcUrl, mobileUrl }),
     });
     if (!res.ok) throw new Error('Failed to create ad');
     return res.json();
