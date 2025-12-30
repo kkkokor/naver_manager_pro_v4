@@ -1,0 +1,607 @@
+import hashlib
+import hmac
+import base64
+import requests
+import json
+import time
+import sys
+import os
+import webbrowser
+import uuid
+import csv 
+from fastapi import FastAPI, HTTPException, Request, Header, Query
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
+from typing import List, Optional, Dict, Any
+from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# [★수정] 윈도우 CMD에서 이모티콘(✅, ⚠️) 출력 시 튕기는 문제 해결 (UTF-8 강제 설정)
+try:
+    if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+    if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8')
+except Exception:
+    pass
+
+if sys.stdout is None: sys.stdout = open(os.devnull, "w")
+if sys.stderr is None: sys.stderr = open(os.devnull, "w")
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+BASE_URL = "https://api.searchad.naver.com"
+
+# --- Models ---
+class AdCreateItem(BaseModel):
+    adGroupId: str
+    headline: str
+    description: str
+
+class ExtensionCreateItem(BaseModel):
+    adGroupId: str
+    type: str 
+    businessChannelId: Optional[str] = None
+    attributes: Optional[Dict[str, Any]] = None 
+
+class StatusUpdate(BaseModel):
+    status: str 
+
+class BulkBidItem(BaseModel):
+    keywordId: str
+    adGroupId: str 
+    bidAmt: int
+
+class KeywordCreateItem(BaseModel):
+    adGroupId: str
+    keyword: str
+    bidAmt: Optional[int] = None
+
+class LogItem(BaseModel):
+    time: str
+    keyword: str
+    oldBid: int
+    newBid: int
+    reason: str
+
+# --- Core Helpers ---
+def generate_signature(timestamp, method, uri, secret_key):
+    message = f"{timestamp}.{method}.{uri}"
+    hash = hmac.new(bytes(secret_key, "utf-8"), bytes(message, "utf-8"), hashlib.sha256)
+    return base64.b64encode(hash.digest()).decode()
+
+def get_header(method, uri, api_key, secret_key, customer_id):
+    timestamp = str(int(time.time() * 1000))
+    signature = generate_signature(timestamp, method, uri, secret_key)
+    return {
+        "Content-Type": "application/json; charset=UTF-8",
+        "X-Timestamp": timestamp,
+        "X-API-KEY": api_key,
+        "X-Customer": str(customer_id),
+        "X-Signature": signature
+    }
+
+def call_api_sync(args):
+    method, uri, params, body, auth = args
+    if not auth or not auth.get('api_key'): return None
+    headers = get_header(method, uri, auth['api_key'], auth['secret_key'], auth['customer_id'])
+    try:
+        if method in ["POST", "PUT", "DELETE"]:
+            if isinstance(body, str):
+                resp = requests.request(method, BASE_URL + uri, params=params, data=body, headers=headers)
+            else:
+                resp = requests.request(method, BASE_URL + uri, params=params, json=body, headers=headers)
+        else:
+            resp = requests.get(BASE_URL + uri, params=params, headers=headers)
+            
+        if resp.status_code == 200: 
+            return resp.json()
+        
+        # 에러 발생 시 상태 코드와 메시지 출력
+        print(f" API Error [{resp.status_code}]: {uri}")
+        print(f"   -> Response: {resp.text[:200]}")
+        return None
+    except Exception as e: 
+        print(f" Network Error: {e}")
+        return None
+
+# [통계 기간: 오늘 하루로 고정]
+def fetch_stats(ids_list: list, auth: dict, since: str = None, until: str = None, device: str = None):
+    if not ids_list or not auth: return {}
+    stats_map = {}
+    chunk_size = 50
+    
+    if not since or not until:
+        today = datetime.now()
+        today_str = today.strftime("%Y-%m-%d")
+        time_range = {"since": today_str, "until": today_str}
+    else:
+        time_range = {"since": since, "until": until}
+    
+    for i in range(0, len(ids_list), chunk_size):
+        chunk = ids_list[i:i + chunk_size]
+        ids_str = ",".join(chunk)
+        params = {
+            'ids': ids_str,
+            'fields': '["impCnt","clkCnt","salesAmt","ccnt","avgRnk","convAmt"]', 
+            'timeRange': json.dumps(time_range) 
+        }
+        
+        if device and device in ['PC', 'MOBILE']:
+            pass 
+
+        args = ("GET", "/stats", params, None, auth)
+        res = call_api_sync(args)
+        if res and 'data' in res:
+            for item in res['data']: stats_map[item['id']] = item
+        time.sleep(0.05)
+    return stats_map
+
+def safe_int(value):
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return 0
+
+def format_stats(stat_item):
+    if not stat_item: 
+        return {"impressions": 0, "clicks": 0, "cost": 0, "ctr": 0, "cpc": 0, "conversions": 0, "cpa": 0, "roas": 0, "convAmt": 0}
+    
+    imp = safe_int(stat_item.get('impCnt', 0))
+    clk = safe_int(stat_item.get('clkCnt', 0))
+    cost = safe_int(stat_item.get('salesAmt', 0))
+    conv = safe_int(stat_item.get('ccnt', 0))
+    conv_amt = safe_int(stat_item.get('convAmt', 0))
+    
+    ctr = (clk / imp * 100) if imp > 0 else 0
+    cpc = (cost / clk) if clk > 0 else 0
+    cpa = (cost / conv) if conv > 0 else 0
+    roas = (conv_amt / cost * 100) if cost > 0 else 0
+
+    return {
+        "impressions": imp,
+        "clicks": clk,
+        "cost": cost,
+        "ctr": round(ctr, 2),
+        "cpc": round(cpc, 0),
+        "conversions": conv,
+        "cpa": round(cpa, 0),
+        "convAmt": conv_amt,
+        "roas": round(roas, 0)
+    }
+
+def normalize_type(raw_type: str) -> str:
+    t = raw_type.upper()
+    if 'SUB' in t or 'LINK' in t:
+        if 'BLOG' not in t and 'URL' not in t and 'IMAGE' not in t: return 'ADDITIONAL_LINK'
+    if 'PHONE' in t: return 'PHONE_NUMBER'
+    if 'LOC' in t or 'PLACE' in t: return 'PLACE'
+    if 'URL' in t: return 'URL'
+    if 'IMG' in t or 'IMAGE' in t: return 'MOBILE_IMAGE'
+    if 'TITLE' in t: return 'ADDITIONAL_TITLE'
+    if 'PROMO' in t: return 'PROMOTION_TEXT'
+    if 'BLOG' in t or 'CAFE' in t: return 'BLOG'
+    return t
+
+def convert_ads(ad_list):
+    result = []
+    for ad in ad_list:
+        details = ad.get('ad', {})
+        result.append({
+            "nccAdId": ad['nccAdId'], "nccAdGroupId": ad['nccAdgroupId'], "type": ad.get('type', 'TEXT'),
+            "headline": details.get('headline', '-'), "description": details.get('description', '-'),
+            "status": ad.get('userLock', False)
+        })
+    return result
+
+# --- 방문자 추적 및 로그 시스템 ---
+VISIT_LOG_FILE = "visits.json"
+
+def load_visit_logs():
+    if os.path.exists(VISIT_LOG_FILE):
+        try:
+            with open(VISIT_LOG_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except: return []
+    return []
+
+def save_visit_logs(logs):
+    with open(VISIT_LOG_FILE, "w", encoding="utf-8") as f:
+        json.dump(logs[:1000], f, ensure_ascii=False, indent=2)
+
+@app.post("/api/track/visit")
+async def track_visit(request: Request):
+    try:
+        body = await request.json()
+        client_ip = request.headers.get("x-forwarded-for") or request.client.host
+        url = body.get("url", "")
+        referrer = body.get("referrer", "")
+        
+        visit_type = "DIRECT"
+        keyword = "-"
+        
+        if "n_keyword" in url or "n_query" in url:
+            visit_type = "AD"
+            if "n_keyword=" in url:
+                keyword = url.split("n_keyword=")[1].split("&")[0]
+            elif "n_query=" in url:
+                keyword = url.split("n_query=")[1].split("&")[0]
+            import urllib.parse
+            keyword = urllib.parse.unquote(keyword)
+            
+        elif "naver.com" in referrer or "google.com" in referrer:
+            visit_type = "ORGANIC"
+        
+        log_entry = {
+            "id": str(uuid.uuid4()),
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "ip": client_ip,
+            "type": visit_type,
+            "keyword": keyword,
+            "url": url,
+            "referrer": referrer
+        }
+        
+        logs = load_visit_logs()
+        logs.insert(0, log_entry)
+        save_visit_logs(logs)
+        return {"success": True}
+    except Exception as e:
+        print(f"Tracking Error: {e}")
+        return {"success": False}
+
+@app.get("/api/track/logs")
+def get_visit_logs():
+    return load_visit_logs()
+
+# --- 입찰 로그 자동 저장 API ---
+@app.post("/api/log/save")
+def save_bid_logs(items: List[LogItem]):
+    try:
+        # 1. logs 폴더가 없으면 생성
+        if not os.path.exists("logs"):
+            os.makedirs("logs")
+        
+        # 2. 오늘 날짜 파일명 생성
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        filename = f"logs/log_{today_str}.csv"
+        
+        # 3. 파일이 없으면 헤더 작성, 있으면 내용 추가 (append)
+        file_exists = os.path.isfile(filename)
+        
+        with open(filename, mode='a', newline='', encoding='utf-8-sig') as file:
+            writer = csv.writer(file)
+            if not file_exists:
+                writer.writerow(["시간", "키워드", "기존입찰가", "변경입찰가", "변동폭", "변경사유"])
+            
+            for item in items:
+                diff = item.newBid - item.oldBid
+                writer.writerow([item.time, item.keyword, item.oldBid, item.newBid, diff, item.reason])
+                
+        return {"status": "success", "count": len(items)}
+    except Exception as e:
+        print(f"Log save error: {e}")
+        return {"status": "error", "message": str(e)}
+
+# --- Endpoints ---
+@app.get("/api/campaigns")
+def get_campaigns(
+    x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...),
+    since: Optional[str] = None, until: Optional[str] = None
+):
+    auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
+    camps = call_api_sync(("GET", "/ncc/campaigns", None, None, auth))
+    if not camps: return []
+    ids = [c['nccCampaignId'] for c in camps]
+    stats_map = fetch_stats(ids, auth, since, until)
+    return [{
+        "nccCampaignId": c['nccCampaignId'], "name": c['name'], "campaignType": c.get('campaignType', 'WEB_SITE'),
+        "status": c.get('status', 'UNKNOWN'), "stats": format_stats(stats_map.get(c['nccCampaignId']))
+    } for c in camps]
+
+@app.get("/api/adgroups")
+def get_adgroups(campaign_id: str = Query(...), x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
+    auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
+    groups = call_api_sync(("GET", "/ncc/adgroups", {'nccCampaignId': campaign_id}, None, auth))
+    if not groups: return []
+    ids = [g['nccAdgroupId'] for g in groups]
+    stats_map = fetch_stats(ids, auth)
+    return [{
+        "nccAdGroupId": g['nccAdgroupId'], "nccCampaignId": g['nccCampaignId'], "name": g['name'],
+        "bidAmt": g.get('bidAmt', 0), "status": g.get('status', 'UNKNOWN'), "stats": format_stats(stats_map.get(g['nccAdgroupId']))
+    } for g in groups]
+
+# [★핵심 수정] target_rank 파라미터 추가 & POST 방식 & 키워드 ID 확인 강화
+@app.get("/api/keywords")
+def get_keywords(
+    adgroup_id: str = Query(...), 
+    device: Optional[str] = Query(None),
+    target_rank: int = Query(3),  # [추가됨] 화면에서 보낸 목표 순위 (기본값 3)
+    x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
+    
+    auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
+    adgroup = call_api_sync(("GET", f"/ncc/adgroups/{adgroup_id}", None, None, auth))
+    group_bid = adgroup.get('bidAmt', 0) if adgroup else 0
+    kwd_list = call_api_sync(("GET", "/ncc/keywords", {'nccAdgroupId': adgroup_id}, None, auth))
+    if not kwd_list: return []
+    
+    ids_for_est = [k['nccKeywordId'] for k in kwd_list]
+    estimates_map = {}
+    
+    api_device = device if device in ['PC', 'MOBILE'] else 'MOBILE'
+
+    # Estimate API 호출 (POST 방식)
+    chunk_size = 50 
+    for i in range(0, len(ids_for_est), chunk_size):
+        chunk = ids_for_est[i:i + chunk_size]
+        
+        # [수정] 목표 순위(target_rank)를 반영하여 요청 생성
+        req_items = [{"key": kw_id, "position": target_rank} for kw_id in chunk]
+        body = {
+            "device": api_device,
+            "items": req_items
+        }
+        
+        # [수정] POST 메서드 및 정확한 주소(/id)
+        args = ("POST", "/estimate/average-position-bid/id", None, body, auth)
+        res = call_api_sync(args)
+        
+        # [DEBUG] 결과 확인
+        if res and 'estimate' in res:
+            print(f"[API 성공] 예상가 {len(res['estimate'])}개 수신 완료 (목표: {target_rank}위).")
+            for item in res['estimate']:
+                # [수정] nccKeywordId, keywordId, key 모두 확인
+                k_id = item.get('nccKeywordId') or item.get('keywordId') or item.get('key')
+                bid_val = item.get('bid', 0)
+                
+                if k_id:
+                    # 응답받은 입찰가를 목표 순위(target_rank) 데이터로 저장
+                    estimates_map[k_id] = [{"rank": target_rank, "bid": bid_val}]
+        else:
+            print(f"[API 실패] 예상가 수신 실패 (res: {res})")
+            
+        time.sleep(0.05)
+
+    stats_map = fetch_stats(ids_for_est, auth)
+    
+    result = []
+    for k in kwd_list:
+        stat = stats_map.get(k['nccKeywordId'])
+        rank_est = stat.get('avgRnk', 0) if stat else 0
+        est_data = estimates_map.get(k['nccKeywordId'], [])
+        
+        result.append({
+            "nccKeywordId": k['nccKeywordId'], "nccAdGroupId": k['nccAdgroupId'], "keyword": k['keyword'],
+            "bidAmt": group_bid if k.get('useGroupBidAmt', False) else k['bidAmt'],
+            "originalBid": k['bidAmt'], "useGroupBidAmt": k.get('useGroupBidAmt', False),
+            "status": k['status'], "managedStatus": "ON" if k['status'] == 'ELIGIBLE' else "OFF",
+            "stats": format_stats(stat), 
+            "currentRankEstimate": rank_est,
+            "bidEstimates": est_data
+        })
+    return result
+
+@app.get("/api/ads")
+def get_ads(campaign_id: Optional[str] = None, adgroup_id: Optional[str] = None, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
+    auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
+    if adgroup_id:
+        ads = call_api_sync(("GET", "/ncc/ads", {'nccAdgroupId': adgroup_id}, None, auth))
+        return convert_ads(ads) if ads else []
+    if campaign_id:
+        groups = call_api_sync(("GET", "/ncc/adgroups", {'nccCampaignId': campaign_id}, None, auth))
+        if not groups: return []
+        all_ads = []
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(call_api_sync, ("GET", "/ncc/ads", {'nccAdgroupId': g['nccAdgroupId']}, None, auth)) for g in groups]
+            for f in as_completed(futures):
+                res = f.result()
+                if res: all_ads.extend(res)
+        return convert_ads(all_ads)
+    return []
+
+@app.post("/api/ads")
+def create_ad(item: AdCreateItem, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
+    auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
+    body = {"type": "TEXT", "nccAdgroupId": item.adGroupId, "ad": { "headline": item.headline, "description": item.description }}
+    res = call_api_sync(("POST", "/ncc/ads", None, json.dumps([body]), auth))
+    if res: return res
+    raise HTTPException(status_code=400, detail="Failed to create ad")
+
+@app.delete("/api/ads/{ad_id}")
+def delete_ad(ad_id: str, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
+    auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
+    res = call_api_sync(("DELETE", f"/ncc/ads/{ad_id}", None, None, auth))
+    if res is not None: return {"success": True}
+    raise HTTPException(status_code=400, detail="Failed to delete ad")
+
+@app.get("/api/channels")
+def get_channels(x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
+    auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
+    channels = call_api_sync(("GET", "/ncc/channels", None, None, auth))
+    if not channels: return []
+    result = []
+    for ch in channels:
+        ch_type = ch.get('channelType', 'UNKNOWN')
+        result.append({
+            "nccBusinessChannelId": ch['nccBusinessChannelId'],
+            "name": ch['name'],
+            "channelKey": ch.get('channelKey', ''),
+            "type": normalize_type(ch_type)
+        })
+    return result
+
+@app.get("/api/extensions")
+def get_extensions(campaign_id: str = Query(...), x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
+    auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
+    groups = call_api_sync(("GET", "/ncc/adgroups", {'nccCampaignId': campaign_id}, None, auth))
+    if not groups: return []
+    all_exts = []
+    
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = [executor.submit(call_api_sync, ("GET", "/ncc/extensions", {'nccAdgroupId': g['nccAdgroupId']}, None, auth)) for g in groups]
+        for f in as_completed(futures):
+            res = f.result()
+            if res:
+                for ext in res:
+                    ext['type'] = normalize_type(ext.get('type', 'UNKNOWN'))
+                    raw_type = ext.get('type', '').lower()
+                    if raw_type not in ext and 'extension' not in ext:
+                         if ext.get(raw_type): ext['extension'] = ext[raw_type]
+                    all_exts.append(ext)
+    return all_exts
+
+@app.post("/api/extensions")
+def create_extension(item: ExtensionCreateItem, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
+    auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
+    body = {"nccAdgroupId": item.adGroupId, "type": item.type}
+    if item.businessChannelId: body["nccBusinessChannelId"] = item.businessChannelId
+    if item.attributes: body["extension"] = item.attributes
+    res = call_api_sync(("POST", "/ncc/extensions", None, json.dumps([body]), auth))
+    if res: return res
+    raise HTTPException(status_code=400, detail="Failed to create extension")
+
+@app.delete("/api/extensions")
+def delete_extension(adGroupId: str, extensionId: Optional[str] = None, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
+    auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
+    if extensionId:
+        res = call_api_sync(("DELETE", f"/ncc/extensions/{extensionId}", None, None, auth))
+        if res is not None: return {"success": True}
+    return {"success": False}
+
+@app.put("/api/extensions/{ext_id}/status")
+def update_extension_status(ext_id: str, update: StatusUpdate, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
+    auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
+    target_lock = True if update.status == 'PAUSED' else False
+    res = call_api_sync(("PUT", f"/ncc/extensions/{ext_id}", {'fields': 'userLock'}, {"userLock": target_lock}, auth))
+    if res: return {"success": True}
+    raise HTTPException(status_code=400, detail="Failed to update extension status")
+
+@app.put("/api/keywords/bid/bulk")
+def bulk_update_bids(items: List[BulkBidItem], x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
+    auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
+    success_count = 0
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = []
+        for item in items:
+            params = {'fields': 'bidAmt,useGroupBidAmt'} 
+            body = {"nccAdgroupId": item.adGroupId, "bidAmt": item.bidAmt, "useGroupBidAmt": False}
+            args = ("PUT", f"/ncc/keywords/{item.keywordId}", params, body, auth)
+            futures.append(executor.submit(call_api_sync, args))
+        for f in as_completed(futures):
+            if f.result(): success_count += 1
+    return {"success": True, "processed": len(items), "updated": success_count}
+
+@app.post("/api/keywords/bulk")
+def create_keywords_bulk(items: List[KeywordCreateItem], x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
+    auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
+    results = []
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {}
+        for item in items:
+            body_dict = {"keyword": item.keyword}
+            if item.bidAmt: body_dict["bidAmt"] = item.bidAmt
+            args = ("POST", "/ncc/keywords", {'nccAdgroupId': item.adGroupId}, json.dumps([body_dict]), auth)
+            futures[executor.submit(call_api_sync, args)] = item.keyword
+        for f in as_completed(futures):
+            kwd = futures[f]
+            res = f.result()
+            if res:
+                if isinstance(res, list) and len(res) > 0: res = res[0]
+                results.append({"keyword": kwd, "status": "success", "id": res.get("nccKeywordId")})
+            else:
+                results.append({"keyword": kwd, "status": "failed"})
+    return {"results": results}
+
+@app.put("/api/ads/{ad_id}/status")
+def update_ad_status(ad_id: str, update: StatusUpdate, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
+    auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
+    target_lock = True if update.status == 'PAUSED' else False
+    res = call_api_sync(("PUT", f"/ncc/ads/{ad_id}", {'fields': 'userLock'}, {"userLock": target_lock}, auth))
+    if res: return {"success": True}
+    raise HTTPException(status_code=400, detail="Failed")
+
+@app.get("/api/tool/ip-exclusion")
+def get_ip_exclusions(x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
+    auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
+    res = call_api_sync(("GET", "/tool/ip-exclusions", None, None, auth))
+    if res: return res
+    return []
+
+@app.post("/api/tool/ip-exclusion")
+def add_ip_exclusion(item: Dict[str, Any], x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
+    auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
+    current_list = call_api_sync(("GET", "/tool/ip-exclusions", None, None, auth))
+    if current_list is None: current_list = []
+    new_ip = item.get('ip')
+    if any(entry.get('ip') == new_ip for entry in current_list):
+        return {"message": "이미 등록된 IP입니다."}
+    current_list.append({"ip": new_ip, "memo": item.get('memo', '')})
+    res = call_api_sync(("PUT", "/tool/ip-exclusions", None, json.dumps(current_list), auth))
+    if res is not None: return {"success": True, "data": res}
+    raise HTTPException(status_code=400, detail="IP 차단 실패")
+
+@app.delete("/api/tool/ip-exclusion/{ip}")
+def delete_ip_exclusion(ip: str, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
+    auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
+    current_list = call_api_sync(("GET", "/tool/ip-exclusions", None, None, auth))
+    if not current_list: return {"success": False}
+    filtered_list = [entry for entry in current_list if entry.get('ip') != ip]
+    res = call_api_sync(("PUT", "/tool/ip-exclusions", None, json.dumps(filtered_list), auth))
+    if res is not None: return {"success": True}
+    raise HTTPException(status_code=400, detail="삭제 실패")
+
+# ---------------------------------------------------------------------
+# [수정된 파일 연결 로직] - 이 부분을 server.py 맨 아래에 덮어쓰세요!
+# ---------------------------------------------------------------------
+
+# 1. 실행 환경에 따라 경로 설정
+if getattr(sys, 'frozen', False):
+    # [배포용 EXE 실행 시] 내부의 'dist' 폴더 사용
+    dist_path = os.path.join(sys._MEIPASS, "dist")
+else:
+    # [개발용 로컬 실행 시] 'frontend' 폴더 우선 탐색!
+    base_dir = os.path.dirname(__file__)
+    frontend_path = os.path.join(base_dir, "frontend")
+    dist_local_path = os.path.join(base_dir, "dist")
+    
+    # frontend 폴더가 있고, 그 안에 index.html이 진짜로 있는지 확인
+    if os.path.exists(frontend_path) and os.path.exists(os.path.join(frontend_path, "index.html")):
+        dist_path = frontend_path
+    else:
+        # 없으면 그냥 dist 폴더 사용 (이 경우 404가 뜰 수 있음)
+        dist_path = dist_local_path
+
+# 2. 정적 파일 연결 (Mount)
+if os.path.exists(dist_path) and os.path.exists(os.path.join(dist_path, "index.html")):
+    app.mount("/", StaticFiles(directory=dist_path, html=True), name="static")
+    print(f"[성공] 화면 파일을 연결했습니다: {dist_path}")
+else:
+    # 경로가 없거나 파일이 없는 경우 안내 메시지 출력
+    print(f"[실패] 화면 파일을 찾을 수 없습니다. (경로: {dist_path})")
+    @app.get("/")
+    def read_root():
+        return HTMLResponse(content=f"""
+            <div style="text-align: center; padding: 40px; font-family: sans-serif;">
+                <h1>⚠️ 화면 파일(index.html)이 없습니다.</h1>
+                <p>현재 서버가 확인한 경로: <b>{dist_path}</b></p>
+                <hr>
+                <p><b>[해결 방법]</b></p>
+                <p>1. <code>frontend</code> 폴더가 있는지 확인하세요.</p>
+                <p>2. 그 안에 <code>index.html</code> 파일이 들어있는지 확인하세요.</p>
+            </div>
+        """)
+
+if __name__ == "__main__":
+    webbrowser.open("http://localhost:8000")
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_config=None)
