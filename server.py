@@ -440,7 +440,7 @@ def create_ad(item: AdCreateItem, x_naver_access_key: str = Header(...), x_naver
     # [★핵심] URL 뒤에 ?isList=true 붙이기
     # [★핵심] Body를 리스트([body])로 감싸기
     uri = "/ncc/ads?isList=true"
-    res = call_api_sync(("POST", uri, None, [body], auth))
+    res = call_api_sync(("POST", "/ncc/ads", {'isList': 'true'}, [body], auth))
     
     if res: return res
     
@@ -533,7 +533,7 @@ def create_extension(item: ExtensionCreateItem, x_naver_access_key: str = Header
 
     # [★핵심] URL 뒤에 ?isList=true 붙이기
     uri = "/ncc/ad-extensions?isList=true"
-    res = call_api_sync(("POST", uri, None, [body], auth))
+    res = call_api_sync(("POST", "/ncc/ad-extensions", {'isList': 'true'}, [body], auth))
     
     if res: return res
     
