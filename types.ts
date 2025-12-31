@@ -79,7 +79,7 @@ export interface Ad {
   mobileUrl?: string;
 }
 
-// [수정됨] 비즈채널 인터페이스
+// ▼▼▼ [필수 추가] 비즈채널 타입 정의 ▼▼▼
 export interface BusinessChannel {
   nccBusinessChannelId: string;
   name: string;

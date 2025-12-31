@@ -1,27 +1,28 @@
-import React, { useState } from 'react';
-import { Campaign, AdGroup } from '../types';
+import React, { useState, useEffect } from 'react';
+import { Campaign, AdGroup, BusinessChannel } from '../types';
 import { naverService } from '../services/naverService';
-import { Filter, Layers, Loader2, CheckCircle, List, FileText, Copy, PlusCircle, AlertTriangle } from 'lucide-react';
-import { BusinessChannel } from '../types'; // BusinessChannel 타입이 없다면 types.ts 확인 필요 (보통 있음)
+import { Filter, Layers, Loader2, CheckCircle, List, FileText, PlusCircle } from 'lucide-react';
 
 interface Props {
     campaigns: Campaign[];
 }
 
 export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
-        const [mode, setMode] = useState<'simple' | 'batch'>('simple');
+    const [mode, setMode] = useState<'simple' | 'batch'>('simple');
 
-    // --- 공통 상태 ---
+    // --- 상태 관리 ---
     const [selectedCampaign, setSelectedCampaign] = useState<string>('');
     const [adGroups, setAdGroups] = useState<AdGroup[]>([]);
     const [isLoadingGroups, setIsLoadingGroups] = useState(false);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [resultLog, setResultLog] = useState<string[]>([]);
-    
-    // 생성된 그룹 알림용
     const [createdGroupLog, setCreatedGroupLog] = useState<string[]>([]);
+    
+    // [비즈채널 상태]
+    const [channels, setChannels] = useState<BusinessChannel[]>([]);
+    const [selectedChannelId, setSelectedChannelId] = useState<string>('');
 
-    // --- Simple Mode 상태 ---
+    // --- Simple Mode ---
     const [regions, setRegions] = useState<string>('');
     const [mainKeywords, setMainKeywords] = useState<string>('');
     const [useAB, setUseAB] = useState<boolean>(true);
@@ -31,21 +32,21 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
     const [filteredGroups, setFilteredGroups] = useState<AdGroup[]>([]);
     const [targetGroupIds, setTargetGroupIds] = useState<Set<string>>(new Set());
 
-    // --- Batch Mode 상태 ---
+    // --- Batch Mode ---
     const [mappingText, setMappingText] = useState<string>(''); 
     const [batchMainKeywords, setBatchMainKeywords] = useState<string>('');
     const [batchUseAB, setBatchUseAB] = useState<boolean>(true);
     const [batchUseBA, setBatchUseBA] = useState<boolean>(false);
 
-    // ▼▼▼ [추가] 비즈채널 관련 상태 ▼▼▼
-    const [channels, setChannels] = useState<BusinessChannel[]>([]);
-    const [selectedChannelId, setSelectedChannelId] = useState<string>('');
-
-    // ▼▼▼ [추가] 컴포넌트 시작 시 비즈채널 목록 가져오기 ▼▼▼
-    React.useEffect(() => {
-        naverService.getChannels().then(setChannels).catch(console.error);
+    // [초기화] 비즈채널 목록 가져오기
+    useEffect(() => {
+        naverService.getChannels()
+            .then(res => {
+                console.log("불러온 채널 목록:", res); // 확인용 로그
+                setChannels(res);
+            })
+            .catch(err => console.error("채널 로드 실패:", err));
     }, []);
-
 
     const handleCampaignChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
         const campId = e.target.value;
@@ -110,7 +111,6 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
             const regionsStr = parts[1].trim();
             const regionList = regionsStr.split(/,|\t/).map(s => s.trim()).filter(s => s);
 
-            // 정확도: 완전 일치 우선, 없으면 포함
             let targetGroup = adGroups.find(g => g.name === groupNameTarget);
             if (!targetGroup) targetGroup = adGroups.find(g => g.name.includes(groupNameTarget));
 
@@ -142,133 +142,31 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
         alert(msg);
     };
 
-    // [★핵심] 그룹의 소재와 확장소재를 새 그룹으로 복사하는 함수
-    const copyGroupSettings = async (sourceGroupId: string, targetGroupId: string) => {
-        setResultLog(prev => [`♻️ 원본 그룹(${sourceGroupId})의 세팅을 복사합니다...`, ...prev]);
-        
-        try {
-            // 1. 소재(Ad) 복사
-            const sourceAds = await naverService.getAds(undefined, sourceGroupId);
-            let adCount = 0;
-            for (const ad of sourceAds) {
-                // 원본 소재 내용을 바탕으로 새 소재 생성
-                try {
-                    await naverService.createAd(targetGroupId, ad.headline, ad.description);
-                    adCount++;
-                } catch (e) {
-                    console.error("소재 복사 실패:", e);
-                }
-            }
-            setResultLog(prev => [`  L 소재 ${adCount}개 복사 완료`, ...prev]);
-
-            // 2. 확장소재(Extensions) 복사
-            // 서버에 구현된 '그룹별 확장소재 조회' 기능 사용
-            const sourceExts = await naverService.getExtensionsByGroup(sourceGroupId);
-            let extCount = 0;
-            for (const ext of sourceExts) {
-                try {
-                    // 비즈채널형인지 일반형인지 구분하여 파라미터 구성
-                    const businessChannelId = ext.pcChannelId || ext.mobileChannelId || undefined;
-                    const attributes = ext.extension || {}; // 파싱된 JSON 객체 그대로 사용
-
-                    await naverService.createExtension(targetGroupId, ext.type, businessChannelId, attributes);
-                    extCount++;
-                } catch (e) {
-                    console.error(`확장소재(${ext.type}) 복사 실패:`, e);
-                }
-            }
-            setResultLog(prev => [`  L 확장소재 ${extCount}개 복사 완료`, ...prev]);
-
-        } catch (e) {
-            console.error("그룹 세팅 복사 중 치명적 오류:", e);
-            setResultLog(prev => [`❌ 그룹 복사 실패: ${e}`, ...prev]);
-        }
-    };
-
-    // [핵심] 오버플로우 처리 (1000개 초과 시 그룹 분할)
-    const processGroupOverflow = async (task: { groupId: string, groupName: string, keywords: string[] }) => {
-        const MAX_LIMIT = 1000;
-        
-        // 1. 현재 그룹의 키워드 개수 확인
-        const currentKwds = await naverService.getKeywords(task.groupId, 'MOBILE', 3);
-        const currentCount = currentKwds.length;
-        const remainingSpace = Math.max(0, MAX_LIMIT - currentCount);
-
-        const results: { groupId: string, groupName: string, keywords: string[] }[] = [];
-
-        // 2. 원본 그룹에 넣을 수 있는 만큼 넣기
-        if (task.keywords.length <= remainingSpace) {
-            results.push(task);
-            return results;
-        }
-
-        // 3. 꽉 차서 넘치는 경우
-        const toOriginal = task.keywords.slice(0, remainingSpace);
-        if (toOriginal.length > 0) {
-            results.push({ groupId: task.groupId, groupName: task.groupName, keywords: toOriginal });
-        }
-
-        let leftovers = task.keywords.slice(remainingSpace);
-        let suffix = 1;
-
-        // 4. 남은 키워드를 담을 새 그룹 생성 반복
-        while (leftovers.length > 0) {
-            const chunk = leftovers.slice(0, MAX_LIMIT);
-            leftovers = leftovers.slice(MAX_LIMIT);
-
-            // 새 그룹 이름 결정 (중복 피하기)
-            let newGroupName = `${task.groupName}_${suffix}`;
-            while (adGroups.find(g => g.name === newGroupName)) {
-                suffix++;
-                newGroupName = `${task.groupName}_${suffix}`;
-            }
-
-            try {
-                // (1) 새 그룹 생성
-                const newGroup = await naverService.createAdGroup(selectedCampaign, newGroupName);
-                setCreatedGroupLog(prev => [`✨ 그룹 생성: ${newGroupName}`, ...prev]);
-                
-                // (2) [★중요] 원본 그룹의 소재/확장소재 복사
-                await copyGroupSettings(task.groupId, newGroup.nccAdGroupId);
-
-                // (3) 작업 목록에 추가
-                results.push({ groupId: newGroup.nccAdGroupId, groupName: newGroup.name, keywords: chunk });
-                
-            } catch (e) {
-                setResultLog(prev => [`❌ 그룹 생성 실패 (${newGroupName}): ${e}`, ...prev]);
-                break; 
-            }
-            suffix++;
-        }
-
-        return results;
-    };
-
-    // [수정됨] 서버의 스마트 확장 API를 호출하는 심플한 로직
+    // [서버로 스마트 확장 요청]
     const executeSubmit = async (initialTasks: { groupId: string, groupName: string, keywords: string[] }[]) => {
         if (!selectedChannelId) {
-            alert("비즈채널(웹사이트)을 반드시 선택해야 합니다!");
+            alert("비즈채널(웹사이트)을 반드시 선택해야 합니다! (그룹 생성 필수값)");
             return;
         }
 
         setIsSubmitting(true);
         setResultLog([]);
+        setCreatedGroupLog([]);
         
         let successCount = 0;
         setResultLog(prev => ["🚀 스마트 확장 시작 (서버로 요청 전송)...", ...prev]);
 
         for (const task of initialTasks) {
             try {
-                // 서버에 '이 그룹, 이 키워드들, 이 비즈채널로 처리해줘' 라고 요청
                 await naverService.smartExpand({
                     sourceGroupId: task.groupId,
                     keywords: task.keywords,
-                    bidAmt: 70, // 기본 입찰가 (필요시 UI 추가 가능)
-                    businessChannelId: selectedChannelId // [핵심] 사용자가 선택한 채널 ID 전송
+                    bidAmt: 70, 
+                    businessChannelId: selectedChannelId 
                 });
                 
                 successCount++;
-                setResultLog(prev => [`✅ [${task.groupName}] 확장 완료 (키워드 ${task.keywords.length}개)`, ...prev]);
+                setResultLog(prev => [`✅ [${task.groupName}] 확장 요청 성공`, ...prev]);
             } catch (e) {
                 console.error(e);
                 setResultLog(prev => [`❌ [${task.groupName}] 실패: ${e}`, ...prev]);
@@ -278,15 +176,18 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
         setIsSubmitting(false);
         alert(`작업 완료! 총 ${successCount}개 그룹 처리됨.`);
         
-        // 그룹 목록 갱신
         if (selectedCampaign) {
-            const groups = await naverService.getAdGroups(selectedCampaign);
-            setAdGroups(groups);
+            try {
+                const groups = await naverService.getAdGroups(selectedCampaign);
+                setAdGroups(groups);
+            } catch(e) {}
         }
     };
 
     const handleSubmitSimple = async () => {
         if (targetGroupIds.size === 0 || generatedKeywords.length === 0) return;
+        if (!selectedChannelId) { alert("비즈채널을 선택해주세요."); return; }
+        
         if (!confirm(`선택한 ${targetGroupIds.size}개 그룹에 ${generatedKeywords.length}개씩 등록합니다.`)) return;
 
         const tasks: { groupId: string, groupName: string, keywords: string[] }[] = [];
@@ -299,11 +200,13 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
 
     const handleSubmitBatch = async () => {
         if (!selectedCampaign) return;
+        if (!selectedChannelId) { alert("비즈채널을 선택해주세요."); return; }
+
         const result = parseBatchData();
         if (!result || result.tasks.length === 0) { alert("매칭된 작업이 없습니다."); return; }
 
         const totalKwd = result.tasks.reduce((sum, t) => sum + t.keywords.length, 0);
-        if (!confirm(`총 ${result.tasks.length}개 그룹에 ${totalKwd}개 키워드 등록을 시도합니다.\n(꽉 찬 그룹은 자동으로 새 그룹을 생성하고 소재를 복사합니다)`)) return;
+        if (!confirm(`총 ${result.tasks.length}개 그룹 실행. (비즈채널 ID 적용)`)) return;
 
         await executeSubmit(result.tasks);
     };
@@ -325,12 +228,12 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
 
             <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm flex items-center gap-4">
                 <span className="font-bold text-gray-700 min-w-[80px]">대상 캠페인:</span>
-                <select className="flex-1 border p-2 rounded..." value={selectedCampaign} onChange={handleCampaignChange}>
+                <select className="flex-1 border p-2 rounded focus:ring-2 focus:ring-naver-green outline-none" value={selectedCampaign} onChange={handleCampaignChange}>
                     <option value="">캠페인을 선택하세요</option>
                     {campaigns.map(c => <option key={c.nccCampaignId} value={c.nccCampaignId}>{c.name}</option>)}
                 </select>
 
-                {/* ▼▼▼ [추가] 비즈채널 선택 드롭다운 ▼▼▼ */}
+                {/* ▼▼▼ [누락되었던 부분] 비즈채널 선택 박스 추가 ▼▼▼ */}
                 <span className="font-bold text-gray-700 min-w-[80px] ml-4">비즈채널:</span>
                 <select 
                     className="flex-1 border p-2 rounded focus:ring-2 focus:ring-naver-green outline-none" 
@@ -339,7 +242,8 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
                 >
                     <option value="">웹사이트를 선택하세요 (필수)</option>
                     {channels
-                        .filter(ch => ch.type === 'WEB_SITE') // 웹사이트만 필터링
+                        // WEB_SITE 타입만 보여줍니다. (대소문자 문제 방지 위해 includes 사용)
+                        .filter(ch => ch.type && ch.type.toUpperCase().includes('WEB')) 
                         .map(ch => (
                             <option key={ch.nccBusinessChannelId} value={ch.nccBusinessChannelId}>
                                 {ch.name} ({ch.channelKey})
@@ -347,6 +251,8 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
                         ))
                     }
                 </select>
+                {/* ▲▲▲ ------------------------------------------ ▲▲▲ */}
+
                 {isLoadingGroups && <Loader2 className="animate-spin text-gray-400"/>}
             </div>
             
@@ -418,7 +324,6 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
                             스마트 일괄 등록 (자동 확장)
                         </button>
 
-                        {/* 로그 표시 영역 */}
                         {(createdGroupLog.length > 0 || resultLog.length > 0) && (
                             <div className="bg-gray-900 text-xs p-3 rounded h-32 overflow-y-auto font-mono">
                                 {createdGroupLog.map((log, i) => <div key={`g-${i}`} className="text-yellow-400 mb-1">{log}</div>)}
