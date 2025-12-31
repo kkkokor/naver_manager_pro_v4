@@ -531,53 +531,25 @@ def get_extensions(
 def create_extension(item: ExtensionCreateItem, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
     auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
 
-    # 기본 Body 구성 (단일 확장소재)
-    single_extension = {
-        "ownerId": item.adGroupId,
-        "type": item.type.upper()
-    }
+    # 요청 데이터 구성 (배열 형태로 변경)
+    payload = [
+        {
+            "ownerId": item.adGroupId,
+            "type": item.type.upper(),
+            "adExtension": {
+                "links": [
+                    {"linkName": "Link 1", "url": "https://example1.com"},
+                    {"linkName": "Link 2", "url": "https://example2.com"}
+                ]
+            }
+        }
+    ]
 
-    # 채널 ID 추가
-    if item.businessChannelId:
-        single_extension["pcChannelId"] = item.businessChannelId
-        single_extension["mobileChannelId"] = item.businessChannelId
-
-    # 확장소재 유형별 데이터 처리
-    ext_type = item.type.upper()
-    if ext_type == "SUB_LINKS":
-        # 서브링크 데이터 구성
-        links = [
-            {"linkName": "Link 1", "url": "https://example1.com"},
-            {"linkName": "Link 2", "url": "https://example2.com"},
-            {"linkName": "Link 3", "url": "https://example3.com"},
-            {"linkName": "Link 4", "url": "https://example4.com"}
-        ]
-        single_extension["adExtension"] = {"links": links}
-
-    elif ext_type == "IMAGE_SUB_LINKS":
-        # 이미지 서브링크 데이터 구성
-        links = [
-            {"linkName": "Image Link 1", "url": "https://example1.com", "imageId": "img-12345"},
-            {"linkName": "Image Link 2", "url": "https://example2.com", "imageId": "img-67890"},
-            {"linkName": "Image Link 3", "url": "https://example3.com", "imageId": "img-23456"},
-            {"linkName": "Image Link 4", "url": "https://example4.com", "imageId": "img-78901"}
-        ]
-        single_extension["adExtension"] = {"links": links}
-
-    else:
-        # 기타 유형 처리
-        pass
-
-    # 요청 데이터를 배열로 감싸기 (서버가 배열을 요구)
-    data = [single_extension]
-
-    # 디버깅용 데이터 출력
-    print(f"[DEBUG] Sending Request Data: {json.dumps(data, ensure_ascii=False)}")
-
-    # API 호출
+    # API 요청
     uri = "/ncc/ad-extensions"
-    params = {'isList': 'true'}  # 리스트 처리 활성화
-    res = call_api_sync(("POST", uri, params, data, auth))
+    params = {"isList": "true"}  # 서버에 리스트 형태 데이터 전송을 명시
+    print(f"[DEBUG] Sending Payload: {json.dumps(payload, ensure_ascii=False)}")
+    res = call_api_sync(("POST", uri, params, payload, auth))
 
     if res:
         return res
