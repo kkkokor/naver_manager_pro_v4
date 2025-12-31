@@ -59,7 +59,6 @@ class ExtensionCreateItem(BaseModel):
     type: str 
     businessChannelId: Optional[str] = None
     attributes: Optional[Dict[str, Any]] = None 
-    # [핵심 수정] 이 줄이 없어서 데이터가 버려지고 있었습니다!
     adExtension: Optional[Dict[str, Any]] = None
 
 class StatusUpdate(BaseModel):
@@ -81,6 +80,12 @@ class LogItem(BaseModel):
     oldBid: int
     newBid: int
     reason: str
+
+# [NEW] 스마트 확장 기능용 모델
+class SmartExpandItem(BaseModel):
+    sourceGroupId: str
+    keywords: List[str]
+    bidAmt: Optional[int] = None
 
 # --- Core Helpers ---
 def generate_signature(timestamp, method, uri, secret_key):
@@ -325,6 +330,130 @@ def save_bid_logs(items: List[LogItem]):
         return {"status": "error", "message": str(e)}
 
 # --- Endpoints ---
+
+# 1. [스마트 키워드 확장 API] (핵심 기능: 그룹 자동 생성 및 복제)
+@app.post("/api/tools/smart-expand")
+def smart_expand_keywords(
+    item: SmartExpandItem,
+    x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)
+):
+    auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
+    print(f"[SmartExpand] 시작: 원본그룹 {item.sourceGroupId}, 키워드 {len(item.keywords)}개")
+
+    # 1. 원본 그룹 정보 조회 (채널 정보 등 복사를 위해)
+    source_group = call_api_sync(("GET", f"/ncc/adgroups/{item.sourceGroupId}", None, None, auth))
+    if not source_group:
+        raise HTTPException(status_code=404, detail="Source group not found")
+    
+    # 2. 현재 키워드 개수 확인
+    current_keywords = call_api_sync(("GET", "/ncc/keywords", {'nccAdgroupId': item.sourceGroupId}, None, auth))
+    current_count = len(current_keywords) if current_keywords else 0
+    print(f"   -> 현재 키워드 수: {current_count}개")
+
+    remaining_keywords = item.keywords
+    target_group_id = item.sourceGroupId
+    
+    # (A) 현재 그룹에 빈 자리가 있으면 먼저 채우기
+    available_slots = 1000 - current_count
+    if available_slots > 0:
+        chunk = remaining_keywords[:available_slots]
+        if chunk:
+            print(f"   -> 현재 그룹에 {len(chunk)}개 추가")
+            _add_keywords_to_group(target_group_id, chunk, item.bidAmt, auth)
+            remaining_keywords = remaining_keywords[available_slots:]
+    
+    # (B) 남은 키워드가 있다면 새 그룹 생성 및 복제 반복
+    group_suffix_idx = 2
+    base_name = source_group['name'].split('_')[0]
+
+    while remaining_keywords:
+        print(f"   -> 남은 키워드 {len(remaining_keywords)}개 처리 중...")
+        
+        # 새 그룹 이름 결정 (중복 피하기)
+        while True:
+            new_name = f"{base_name}_{group_suffix_idx}"
+            try:
+                new_group_body = {
+                    "nccCampaignId": source_group['nccCampaignId'],
+                    "name": new_name,
+                    "pcChannelId": source_group.get('pcChannelId'),
+                    "mobileChannelId": source_group.get('mobileChannelId')
+                }
+                new_group = call_api_sync(("POST", "/ncc/adgroups", None, new_group_body, auth))
+                
+                # 이미 존재하는 이름이면 에러가 날 수 있음 -> 번호 증가
+                if new_group and 'nccAdgroupId' in new_group:
+                    target_group_id = new_group['nccAdgroupId']
+                    print(f"   -> 새 그룹 생성 완료: {new_name} ({target_group_id})")
+                    break
+            except:
+                pass
+            group_suffix_idx += 1
+            if group_suffix_idx > 100: break
+
+        # (C) 소재 & 확장소재 복제 (서버 사이드 복제라 안전함)
+        print(f"   -> 소재/확장소재 복제 시작")
+        _clone_ads_and_extensions(item.sourceGroupId, target_group_id, auth)
+
+        # (D) 새 그룹에 키워드 1000개 채우기
+        chunk = remaining_keywords[:1000]
+        _add_keywords_to_group(target_group_id, chunk, item.bidAmt, auth)
+        remaining_keywords = remaining_keywords[1000:]
+        group_suffix_idx += 1
+
+    return {"status": "success", "message": "All keywords processed"}
+
+def _add_keywords_to_group(group_id, keywords, bid_amt, auth):
+    # 키워드는 100개씩 끊어서 전송
+    for i in range(0, len(keywords), 100):
+        chunk = keywords[i:i+100]
+        body = [{"nccAdgroupId": group_id, "keyword": k, "bidAmt": bid_amt} for k in chunk]
+        call_api_sync(("POST", "/ncc/keywords", None, body, auth))
+        time.sleep(0.1)
+
+def _clone_ads_and_extensions(src_id, dst_id, auth):
+    # 1. 소재 복제
+    ads = call_api_sync(("GET", "/ncc/ads", {'nccAdgroupId': src_id}, None, auth))
+    if ads:
+        for ad in ads:
+            try:
+                ad_detail = ad.get('ad', {})
+                if isinstance(ad_detail, str): ad_detail = json.loads(ad_detail)
+                
+                new_ad = {
+                    "type": "TEXT",
+                    "nccAdgroupId": dst_id,
+                    "ad": {
+                        "headline": ad_detail.get('headline'),
+                        "description": ad_detail.get('description'),
+                        "pcUrl": ad_detail.get('pcUrl'),
+                        "mobileUrl": ad_detail.get('mobileUrl')
+                    }
+                }
+                call_api_sync(("POST", "/ncc/ads", None, new_ad, auth))
+            except Exception as e:
+                print(f"[Clone Ad Error] {e}")
+
+    # 2. 확장소재 복제 (핵심: 서버에서 읽어서 바로 쓰기 때문에 형식 오류 없음)
+    exts = call_api_sync(("GET", "/ncc/ad-extensions", {'ownerId': src_id}, None, auth))
+    if exts:
+        for ext in exts:
+            try:
+                new_ext = {
+                    "ownerId": dst_id,
+                    "type": ext['type'],
+                    "pcChannelId": ext.get('pcChannelId'),
+                    "mobileChannelId": ext.get('mobileChannelId')
+                }
+                # adExtension 내용이 있으면 그대로 복사 (SUB_LINKS 등 포함)
+                content = ext.get('adExtension')
+                if content:
+                    new_ext['adExtension'] = content
+                
+                call_api_sync(("POST", "/ncc/ad-extensions", None, new_ext, auth))
+            except Exception as e:
+                print(f"[Clone Ext Error] {e}")
+
 @app.get("/api/campaigns")
 def get_campaigns(
     x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...),
@@ -498,8 +627,8 @@ def get_channels(x_naver_access_key: str = Header(...), x_naver_secret_key: str 
 def get_extensions(
     campaign_id: Optional[str] = Query(None), 
     adgroup_id: Optional[str] = Query(None),
-    x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)
-):
+    x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
+    
     auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
     all_exts = []
     
