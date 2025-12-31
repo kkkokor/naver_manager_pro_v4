@@ -2,13 +2,14 @@ import React, { useState } from 'react';
 import { Campaign, AdGroup } from '../types';
 import { naverService } from '../services/naverService';
 import { Filter, Layers, Loader2, CheckCircle, List, FileText, Copy, PlusCircle, AlertTriangle } from 'lucide-react';
+import { BusinessChannel } from '../types'; // BusinessChannel 타입이 없다면 types.ts 확인 필요 (보통 있음)
 
 interface Props {
     campaigns: Campaign[];
 }
 
 export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
-    const [mode, setMode] = useState<'simple' | 'batch'>('simple');
+        const [mode, setMode] = useState<'simple' | 'batch'>('simple');
 
     // --- 공통 상태 ---
     const [selectedCampaign, setSelectedCampaign] = useState<string>('');
@@ -35,6 +36,16 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
     const [batchMainKeywords, setBatchMainKeywords] = useState<string>('');
     const [batchUseAB, setBatchUseAB] = useState<boolean>(true);
     const [batchUseBA, setBatchUseBA] = useState<boolean>(false);
+
+    // ▼▼▼ [추가] 비즈채널 관련 상태 ▼▼▼
+    const [channels, setChannels] = useState<BusinessChannel[]>([]);
+    const [selectedChannelId, setSelectedChannelId] = useState<string>('');
+
+    // ▼▼▼ [추가] 컴포넌트 시작 시 비즈채널 목록 가져오기 ▼▼▼
+    React.useEffect(() => {
+        naverService.getChannels().then(setChannels).catch(console.error);
+    }, []);
+
 
     const handleCampaignChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
         const campId = e.target.value;
@@ -233,48 +244,45 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
         return results;
     };
 
+    // [수정됨] 서버의 스마트 확장 API를 호출하는 심플한 로직
     const executeSubmit = async (initialTasks: { groupId: string, groupName: string, keywords: string[] }[]) => {
-        setIsSubmitting(true);
-        setResultLog([]);
-        setCreatedGroupLog([]);
-        
-        let successTotal = 0;
-        
-        // [1] 그룹별 용량 체크 및 분할 (순차 처리)
-        const finalTasks: { adGroupId: string, keyword: string }[] = [];
-        
-        setResultLog(prev => ["🔄 그룹 용량 분석 및 자동 생성 중...", ...prev]);
-
-        for (const task of initialTasks) {
-            const processedTasks = await processGroupOverflow(task);
-            processedTasks.forEach(pt => {
-                pt.keywords.forEach(k => finalTasks.push({ adGroupId: pt.groupId, keyword: k }));
-            });
+        if (!selectedChannelId) {
+            alert("비즈채널(웹사이트)을 반드시 선택해야 합니다!");
+            return;
         }
 
-        // [2] 키워드 실제 등록
-        const chunkSize = 100;
-        for (let i = 0; i < finalTasks.length; i += chunkSize) {
-            const batch = finalTasks.slice(i, i + chunkSize);
+        setIsSubmitting(true);
+        setResultLog([]);
+        
+        let successCount = 0;
+        setResultLog(prev => ["🚀 스마트 확장 시작 (서버로 요청 전송)...", ...prev]);
+
+        for (const task of initialTasks) {
             try {
-                const res = await naverService.createKeywordsBulk(batch);
-                const success = res ? res.filter((r: any) => r.status === 'success').length : 0;
-                successTotal += success;
-                setResultLog(prev => [`키워드 등록 ${i}~${i+chunkSize}: ${success}개 완료`, ...prev.slice(0, 4)]);
+                // 서버에 '이 그룹, 이 키워드들, 이 비즈채널로 처리해줘' 라고 요청
+                await naverService.smartExpand({
+                    sourceGroupId: task.groupId,
+                    keywords: task.keywords,
+                    bidAmt: 70, // 기본 입찰가 (필요시 UI 추가 가능)
+                    businessChannelId: selectedChannelId // [핵심] 사용자가 선택한 채널 ID 전송
+                });
+                
+                successCount++;
+                setResultLog(prev => [`✅ [${task.groupName}] 확장 완료 (키워드 ${task.keywords.length}개)`, ...prev]);
             } catch (e) {
                 console.error(e);
-                setResultLog(prev => [`등록 ${i} 구간 에러`, ...prev]);
+                setResultLog(prev => [`❌ [${task.groupName}] 실패: ${e}`, ...prev]);
             }
         }
 
         setIsSubmitting(false);
-        // 그룹 목록 갱신 (새로 생긴 그룹 반영)
-        try {
+        alert(`작업 완료! 총 ${successCount}개 그룹 처리됨.`);
+        
+        // 그룹 목록 갱신
+        if (selectedCampaign) {
             const groups = await naverService.getAdGroups(selectedCampaign);
             setAdGroups(groups);
-        } catch(e) {}
-        
-        alert(`완료! 총 ${successTotal}개 키워드 등록.\n새로 생성된 그룹이 있다면 로그를 확인하세요.`);
+        }
     };
 
     const handleSubmitSimple = async () => {
@@ -317,9 +325,27 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
 
             <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm flex items-center gap-4">
                 <span className="font-bold text-gray-700 min-w-[80px]">대상 캠페인:</span>
-                <select className="flex-1 border p-2 rounded focus:ring-2 focus:ring-naver-green outline-none" value={selectedCampaign} onChange={handleCampaignChange}>
+                <select className="flex-1 border p-2 rounded..." value={selectedCampaign} onChange={handleCampaignChange}>
                     <option value="">캠페인을 선택하세요</option>
                     {campaigns.map(c => <option key={c.nccCampaignId} value={c.nccCampaignId}>{c.name}</option>)}
+                </select>
+
+                {/* ▼▼▼ [추가] 비즈채널 선택 드롭다운 ▼▼▼ */}
+                <span className="font-bold text-gray-700 min-w-[80px] ml-4">비즈채널:</span>
+                <select 
+                    className="flex-1 border p-2 rounded focus:ring-2 focus:ring-naver-green outline-none" 
+                    value={selectedChannelId} 
+                    onChange={(e) => setSelectedChannelId(e.target.value)}
+                >
+                    <option value="">웹사이트를 선택하세요 (필수)</option>
+                    {channels
+                        .filter(ch => ch.type === 'WEB_SITE') // 웹사이트만 필터링
+                        .map(ch => (
+                            <option key={ch.nccBusinessChannelId} value={ch.nccBusinessChannelId}>
+                                {ch.name} ({ch.channelKey})
+                            </option>
+                        ))
+                    }
                 </select>
                 {isLoadingGroups && <Loader2 className="animate-spin text-gray-400"/>}
             </div>

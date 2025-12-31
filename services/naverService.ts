@@ -307,5 +307,20 @@ export const naverService = {
     });
     if (!res.ok) throw new Error('Failed to delete IP exclusion');
     return res.json();
+  },
+  // [추가] 스마트 키워드 확장 (서버의 단순화된 로직 호출)
+  async smartExpand(data: { sourceGroupId: string, keywords: string[], bidAmt?: number, businessChannelId: string }) {
+    const res = await fetch(`${API_BASE_URL}/api/tools/smart-expand`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-naver-access-key': localStorage.getItem('naver_access_key') || '',
+        'x-naver-secret-key': localStorage.getItem('naver_secret_key') || '',
+        'x-naver-customer-id': localStorage.getItem('naver_customer_id') || '',
+      },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) throw new Error('Failed to execute smart expand');
+    return res.json();
   }
 };
