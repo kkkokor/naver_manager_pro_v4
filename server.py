@@ -525,12 +525,12 @@ def get_extensions(
     
     return []
 
-# [확장소재 생성 API] (수정됨: adExtension 필드 누락 방지)
+# [Extension Creation API] (Updated to handle nested adExtension)
 @app.post("/api/extensions")
 def create_extension(item: ExtensionCreateItem, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
     auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
 
-    # 1. 기본 Body 구성
+    # 1. Base Body Construction
     body = {
         "ownerId": item.adGroupId,
         "type": item.type.upper()
@@ -540,38 +540,38 @@ def create_extension(item: ExtensionCreateItem, x_naver_access_key: str = Header
         body["pcChannelId"] = item.businessChannelId
         body["mobileChannelId"] = item.businessChannelId
 
-    # 2. 데이터 처리 (attributes가 없으면 adExtension을 확인)
+    # 2. Data Processing
     ext_type = item.type.upper()
-    
-    # [핵심 로직] 프론트엔드가 'attributes'로 보내든 'adExtension'으로 보내든 둘 다 체크!
+    # Get whatever data came in
     raw_attrs = item.attributes or item.adExtension or {}
     
-    # 전화번호/위치 등은 내용이 없어야 하고, 나머지는 있어야 함
-    if ext_type not in ["PHONE", "PLACE", "LOCATION"]:
+    # [FIX] Unwrap if the data is nested inside an 'adExtension' key
+    # (This handles cases where the frontend sends the full API response object as 'attributes')
+    if "adExtension" in raw_attrs and isinstance(raw_attrs["adExtension"], dict):
+        clean_attrs = raw_attrs["adExtension"].copy()
+    else:
         clean_attrs = raw_attrs.copy()
-        
-        # 시스템 필드(읽기전용) 제거
-        for key in ['inspectStatus', 'status', 'regTm', 'editTm', 'nccAdExtensionId', 'nccAdGroupId', 'ownerId']:
+    
+    # Cleaning Logic
+    if ext_type not in ["PHONE", "PLACE", "LOCATION"]:
+        # Remove system fields if they exist at this level
+        for key in ['inspectStatus', 'status', 'regTm', 'editTm', 'nccAdExtensionId', 'nccAdGroupId', 'ownerId', 'type', 'pcChannelId', 'mobileChannelId']:
             clean_attrs.pop(key, None)
 
-        # WEBSITE_INFO 필수값 처리
         if ext_type == "WEBSITE_INFO":
             clean_attrs["agree"] = True
             
-        # 내용이 있으면 Body에 추가 (이제 SUB_LINKS 데이터가 여기로 들어갑니다)
+        # Add to body if content exists
         if clean_attrs:
             body["adExtension"] = clean_attrs
 
-    # 3. API 요청 (단일 객체 전송)
+    # 3. Send Request
     uri = "/ncc/ad-extensions"
-    
-    # 디버깅 로그: 이제 여기에 데이터가 제대로 찍힐 겁니다.
     print(f"[DEBUG] Creating Extension ({ext_type}) Body: {json.dumps(body, ensure_ascii=False)}")
     
     res = call_api_sync(("POST", uri, None, body, auth))
 
-    if res:
-        return res
+    if res: return res
 
     print(f"[FAIL] Extension Create Failed. Body: {body}")
     raise HTTPException(status_code=400, detail="Failed to create extension")
