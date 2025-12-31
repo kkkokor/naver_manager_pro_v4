@@ -460,18 +460,30 @@ def delete_ad(ad_id: str, x_naver_access_key: str = Header(...), x_naver_secret_
 
 @app.get("/api/channels")
 def get_channels(x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
-    auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
-    channels = call_api_sync(("GET", "/ncc/channels", None, None, auth))
-    if not channels: return []
+    """
+    네이버 API의 /ncc/channels 결과에서 비즈채널 목록 반환
+    """
+    auth = {
+        "api_key": x_naver_access_key,
+        "secret_key": x_naver_secret_key,
+        "customer_id": x_naver_customer_id,
+    }
+    channels = call_api_sync(("GET", "/ncc/channels", None, None, auth))  # 네이버 API 호출
+    if not channels:
+        return []
+
+    # 채널 목록 데이터 표준화 및 반환
     result = []
     for ch in channels:
-        ch_type = ch.get('channelType', 'UNKNOWN')
-        result.append({
-            "nccBusinessChannelId": ch['nccBusinessChannelId'],
-            "name": ch['name'],
-            "channelKey": ch.get('channelKey', ''),
-            "type": ch_type 
-        })
+        channel_type = ch.get("channelType", "").upper()  # 타입 대문자화
+        result.append(
+            {
+                "nccBusinessChannelId": ch["nccBusinessChannelId"],
+                "name": ch["name"],
+                "channelKey": ch.get("channelKey", ""),
+                "type": channel_type,  # 표준화된 channelType 값 반환
+            }
+        )
     return result
 
 @app.get("/api/extensions")
