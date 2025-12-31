@@ -89,7 +89,9 @@ def generate_signature(timestamp, method, uri, secret_key):
 
 def get_header(method, uri, api_key, secret_key, customer_id):
     timestamp = str(int(time.time() * 1000))
-    signature = generate_signature(timestamp, method, uri, secret_key)
+    # [핵심] 서명 생성 시 물음표(?) 뒤의 파라미터는 무시하고 순수 주소만 사용
+    clean_uri = uri.split("?")[0]
+    signature = generate_signature(timestamp, method, clean_uri, secret_key)
     return {
         "Content-Type": "application/json; charset=UTF-8",
         "X-Timestamp": timestamp,
@@ -98,25 +100,44 @@ def get_header(method, uri, api_key, secret_key, customer_id):
         "X-Signature": signature
     }
 
+# [1] API 호출 담당 함수 (서명 로직 완벽 수정)
 def call_api_sync(args):
-    method, uri, params, body, auth = args
-    if not auth or not auth.get('api_key'): return None
-    headers = get_header(method, uri, auth['api_key'], auth['secret_key'], auth['customer_id'])
+    # args 분해 (순서: Method, URI, Params, Body, Auth)
+    if len(args) == 5:
+        method, uri, params, body, auth = args
+    else:
+        # 안전장치: 혹시라도 인자가 부족할 경우 처리
+        method, uri, params, body, auth = args[0], args[1], None, args[2], args[3]
+
+    if not auth or not auth.get('api_key'):
+        return {"error": "Missing authentication data"}
+
+    # [★핵심 1] 서명 생성용 URI는 물음표(?) 뒤를 잘라낸 '순수 경로'만 사용
+    # 예: "/ncc/ad-extensions?isList=true" -> "/ncc/ad-extensions"
+    clean_uri = uri.split("?")[0]
+    
+    headers = get_header(method, clean_uri, auth['api_key'], auth['secret_key'], auth['customer_id'])
+    
+    # 실제 요청 URL (requests 라이브러리가 params를 알아서 ?key=value로 붙여줌)
+    url = BASE_URL + clean_uri
+    
     try:
         if method in ["POST", "PUT", "DELETE"]:
-            if isinstance(body, str):
-                resp = requests.request(method, BASE_URL + uri, params=params, data=body, headers=headers)
-            else:
-                resp = requests.request(method, BASE_URL + uri, params=params, json=body, headers=headers)
+            # [★핵심 2] requests에 params와 json(body)을 분리해서 전달
+            # json=body를 쓰면 requests가 알아서 Content-Type 설정 및 직렬화 수행
+            resp = requests.request(method, url, params=params, json=body, headers=headers)
         else:
-            resp = requests.get(BASE_URL + uri, params=params, headers=headers)
+            resp = requests.get(url, params=params, headers=headers)
             
         if resp.status_code == 200: 
             return resp.json()
         
-        print(f"[API Error] [{resp.status_code}]: {uri}")
-        print(f"   -> Response: {resp.text[:200]}")
+        # 에러 발생 시 상세 로그 출력
+        print(f"[API Error] [{resp.status_code}]: {url}")
+        print(f"   -> Params: {params}")
+        print(f"   -> Response: {resp.text[:500]}")
         return None
+
     except Exception as e: 
         print(f"[Network Error]: {e}")
         return None
@@ -419,33 +440,38 @@ def get_ads(campaign_id: Optional[str] = None, adgroup_id: Optional[str] = None,
         return convert_ads(all_ads)
     return []
 
-# [1] 소재(Ad) 생성 API 수정 (isList=true 추가)
+# [2] 소재(Ad) 생성 API (파라미터 분리 적용)
 @app.post("/api/ads")
 def create_ad(item: AdCreateItem, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
     auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
     
-    # 1. 소재 내용
+    # 1. 소재 내용 구성 (Dictionary)
     ad_content = {
         "headline": item.headline,
         "description": item.description
     }
     
-    # 2. Body 구성
-    body = {
+    # 2. 전체 Body 구성 (Dictionary)
+    single_body = {
         "type": "TEXT", 
         "nccAdgroupId": item.adGroupId, 
-        "ad": ad_content 
+        "ad": ad_content  # json.dumps 쓰지 않음!
     }
     
-    # [★핵심] URL 뒤에 ?isList=true 붙이기
-    # [★핵심] Body를 리스트([body])로 감싸기
-    uri = "/ncc/ads?isList=true"
-    res = call_api_sync(("POST", "/ncc/ads", {'isList': 'true'}, [body], auth))
+    # 3. [★핵심 3] isList=true 파라미터 분리 및 Body 리스트핑
+    uri = "/ncc/ads"
+    params = {'isList': 'true'}
+    body_list = [single_body] # 대량 등록 모드이므로 리스트로 감쌈
+
+    res = call_api_sync(("POST", uri, params, body_list, auth))
     
     if res: return res
     
-    print(f"[FAIL] Ad Body: {json.dumps([body], ensure_ascii=False)}")
     raise HTTPException(status_code=400, detail="Failed to create ad")
+
+# 요청 결과를 로깅
+    if 'error' in res:
+        print(f"[DEBUG] API Response: {res['error']}")
 
 @app.delete("/api/ads/{ad_id}")
 def delete_ad(ad_id: str, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
@@ -501,44 +527,66 @@ def get_extensions(
     
     return []
 
-# [2] 확장소재 생성 API 수정 (isList=true 추가)
 @app.post("/api/extensions")
 def create_extension(item: ExtensionCreateItem, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
     auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
-    
-    body = { "ownerId": item.adGroupId, "type": item.type }
-    
+
+    # 기본 Body 구성 (단일 확장소재)
+    single_extension = {
+        "ownerId": item.adGroupId,
+        "type": item.type.upper()
+    }
+
+    # 채널 ID 추가
     if item.businessChannelId:
-        body["pcChannelId"] = item.businessChannelId
-        body["mobileChannelId"] = item.businessChannelId
+        single_extension["pcChannelId"] = item.businessChannelId
+        single_extension["mobileChannelId"] = item.businessChannelId
 
+    # 확장소재 유형별 데이터 처리
     ext_type = item.type.upper()
-    
-    # 확장소재 데이터 정제
-    if ext_type in ["PHONE", "PLACE", "LOCATION"]:
-        pass # 빈손으로 감
+    if ext_type == "SUB_LINKS":
+        # 서브링크 데이터 구성
+        links = [
+            {"linkName": "Link 1", "url": "https://example1.com"},
+            {"linkName": "Link 2", "url": "https://example2.com"},
+            {"linkName": "Link 3", "url": "https://example3.com"},
+            {"linkName": "Link 4", "url": "https://example4.com"}
+        ]
+        single_extension["adExtension"] = {"links": links}
+
+    elif ext_type == "IMAGE_SUB_LINKS":
+        # 이미지 서브링크 데이터 구성
+        links = [
+            {"linkName": "Image Link 1", "url": "https://example1.com", "imageId": "img-12345"},
+            {"linkName": "Image Link 2", "url": "https://example2.com", "imageId": "img-67890"},
+            {"linkName": "Image Link 3", "url": "https://example3.com", "imageId": "img-23456"},
+            {"linkName": "Image Link 4", "url": "https://example4.com", "imageId": "img-78901"}
+        ]
+        single_extension["adExtension"] = {"links": links}
+
     else:
-        raw_attrs = item.attributes or {}
-        clean_attrs = raw_attrs.copy()
-        
-        # 시스템 필드 제거
-        for key in ['inspectStatus', 'status', 'regTm', 'editTm', 'nccAdExtensionId', 'nccAdGroupId', 'ownerId']:
-            clean_attrs.pop(key, None)
+        # 기타 유형 처리
+        pass
 
-        if ext_type == "WEBSITE_INFO":
-            clean_attrs["agree"] = True
+    # 요청 데이터를 배열로 감싸기 (서버가 배열을 요구)
+    data = [single_extension]
 
-        if clean_attrs:
-            body["adExtension"] = clean_attrs
+    # 디버깅용 데이터 출력
+    print(f"[DEBUG] Sending Request Data: {json.dumps(data, ensure_ascii=False)}")
 
-    # [★핵심] URL 뒤에 ?isList=true 붙이기
-    uri = "/ncc/ad-extensions?isList=true"
-    res = call_api_sync(("POST", "/ncc/ad-extensions", {'isList': 'true'}, [body], auth))
-    
-    if res: return res
-    
-    print(f"[FAIL] Ext Body: {json.dumps([body], ensure_ascii=False)}")
+    # API 호출
+    uri = "/ncc/ad-extensions"
+    params = {'isList': 'true'}  # 리스트 처리 활성화
+    res = call_api_sync(("POST", uri, params, data, auth))
+
+    if res:
+        return res
+
     raise HTTPException(status_code=400, detail="Failed to create extension")
+
+    # 요청 결과를 로깅
+    if 'error' in res:
+        print(f"[DEBUG] API Response: {res['error']}")
 
 @app.delete("/api/extensions")
 def delete_extension(adGroupId: str, extensionId: Optional[str] = None, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
