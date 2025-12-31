@@ -59,6 +59,8 @@ class ExtensionCreateItem(BaseModel):
     type: str 
     businessChannelId: Optional[str] = None
     attributes: Optional[Dict[str, Any]] = None 
+    # [핵심 수정] 이 줄이 없어서 데이터가 버려지고 있었습니다!
+    adExtension: Optional[Dict[str, Any]] = None
 
 class StatusUpdate(BaseModel):
     status: str 
@@ -523,7 +525,7 @@ def get_extensions(
     
     return []
 
-# [확장소재 생성 API] (수정됨: 모든 타입 호환, 단일 객체 전송)
+# [확장소재 생성 API] (수정됨: adExtension 필드 누락 방지)
 @app.post("/api/extensions")
 def create_extension(item: ExtensionCreateItem, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
     auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
@@ -534,21 +536,21 @@ def create_extension(item: ExtensionCreateItem, x_naver_access_key: str = Header
         "type": item.type.upper()
     }
     
-    # 비즈니스 채널 ID가 있으면 추가
     if item.businessChannelId:
         body["pcChannelId"] = item.businessChannelId
         body["mobileChannelId"] = item.businessChannelId
 
-    # 2. 타입별 데이터 처리
+    # 2. 데이터 처리 (attributes가 없으면 adExtension을 확인)
     ext_type = item.type.upper()
-    raw_attrs = item.attributes or {}
     
-    # (A) PHONE, PLACE, LOCATION 등은 adExtension 필드가 없거나 비워야 함
-    #     하지만 WEBSITE_INFO, SUB_LINKS 등은 내용이 있어야 함.
+    # [핵심 로직] 프론트엔드가 'attributes'로 보내든 'adExtension'으로 보내든 둘 다 체크!
+    raw_attrs = item.attributes or item.adExtension or {}
+    
+    # 전화번호/위치 등은 내용이 없어야 하고, 나머지는 있어야 함
     if ext_type not in ["PHONE", "PLACE", "LOCATION"]:
         clean_attrs = raw_attrs.copy()
         
-        # 시스템 필드 제거 (복사 시 딸려오는 불필요한 정보 삭제)
+        # 시스템 필드(읽기전용) 제거
         for key in ['inspectStatus', 'status', 'regTm', 'editTm', 'nccAdExtensionId', 'nccAdGroupId', 'ownerId']:
             clean_attrs.pop(key, None)
 
@@ -556,14 +558,14 @@ def create_extension(item: ExtensionCreateItem, x_naver_access_key: str = Header
         if ext_type == "WEBSITE_INFO":
             clean_attrs["agree"] = True
             
-        # [핵심] SUB_LINKS, IMAGE_SUB_LINKS 등은 clean_attrs(즉, item.attributes)를 그대로 adExtension에 할당
+        # 내용이 있으면 Body에 추가 (이제 SUB_LINKS 데이터가 여기로 들어갑니다)
         if clean_attrs:
             body["adExtension"] = clean_attrs
 
-    # 3. API 요청 (리스트([]) 사용 안 함, isList 사용 안 함)
+    # 3. API 요청 (단일 객체 전송)
     uri = "/ncc/ad-extensions"
-    # params = {} -> 단일 생성 시 파라미터 없음
     
+    # 디버깅 로그: 이제 여기에 데이터가 제대로 찍힐 겁니다.
     print(f"[DEBUG] Creating Extension ({ext_type}) Body: {json.dumps(body, ensure_ascii=False)}")
     
     res = call_api_sync(("POST", uri, None, body, auth))
