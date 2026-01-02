@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import re  # [필수] 정규표현식 모듈 추가
 
 # [안전장치] 출력 인코딩
 try:
@@ -726,7 +727,7 @@ def count_total_keywords(
     }
 
 # -----------------------------------------------------------------------------
-# [추가] 스마트 키워드 확장 (단순화 버전: 선택한 비즈채널ID 적용, 복제X, 키워드만 등록)
+# [수정] 스마트 키워드 확장 (키워드 등록 시 nccAdgroupId 파라미터 필수 추가)
 # -----------------------------------------------------------------------------
 
 def _add_keywords_simple(group_id, keywords, bid_amt, auth):
@@ -735,7 +736,11 @@ def _add_keywords_simple(group_id, keywords, bid_amt, auth):
         chunk = keywords[i:i+100]
         # [중요] json.dumps 없이 리스트 그대로 전송
         body = [{"nccAdgroupId": group_id, "keyword": k, "bidAmt": bid_amt} for k in chunk]
-        call_api_sync(("POST", "/ncc/keywords", None, body, auth))
+        
+        # [수정] 네이버 API 요구사항: URL 파라미터로도 group_id를 보내야 함!
+        params = {'nccAdgroupId': group_id}
+        
+        call_api_sync(("POST", "/ncc/keywords", params, body, auth))
         time.sleep(0.1)
 
 @app.post("/api/tools/smart-expand")
@@ -765,48 +770,74 @@ def smart_expand_keywords(
         _add_keywords_simple(target_group_id, chunk, item.bidAmt, auth)
         remaining_keywords = remaining_keywords[available:]
 
-    # 3. 남은 키워드가 있다면 새 그룹 생성 후 채우기 (비즈채널ID 적용)
-    group_idx = 2
-    base_name = source_group['name'].split('_')[0]
+    # 3. 새 그룹 이름 결정을 위한 기본 이름 추출
+    original_name = source_group['name']
+    
+    # 예: '푸른배관케어_M_인천_1' -> '푸른배관케어_M_인천' (정규식 사용)
+    base_name = re.sub(r'_\d+$', '', original_name) 
+    
+    # 이미 '_숫자'가 붙어있던 그룹이면 그 다음 숫자부터 시작, 아니면 1부터 시작
+    group_idx = 1
+    if original_name != base_name:
+        try:
+            group_idx = int(original_name.split('_')[-1]) + 1
+        except:
+            group_idx = 1
 
+    # 4. 남은 키워드가 있다면 새 그룹 생성 후 채우기
     while remaining_keywords:
-        # 그룹 생성 시도 반복 (이름 중복 해결을 위해)
         new_group = None
-        while not new_group and group_idx < 100:
+        retry_count = 0 
+        max_retries = 5
+
+        while not new_group and retry_count < max_retries:
             new_name = f"{base_name}_{group_idx}"
-            print(f"   -> 새 그룹 생성 시도: {new_name}")
+            print(f"   -> 새 그룹 생성 시도 ({retry_count + 1}/{max_retries}): {new_name}")
 
-            body = {
-                "nccCampaignId": source_group['nccCampaignId'],
-                "name": new_name,
-                "pcChannelId": item.businessChannelId,     # [핵심] 사용자가 지정한 채널 ID 적용
-                "mobileChannelId": item.businessChannelId  # [핵심] 사용자가 지정한 채널 ID 적용
-            }
-            
-            res = call_api_sync(("POST", "/ncc/adgroups", None, body, auth))
+            try:
+                body = {
+                    "nccCampaignId": source_group['nccCampaignId'],
+                    "name": new_name
+                }
+                
+                # [필수] 비즈채널 ID 적용
+                if item.businessChannelId:
+                    body['pcChannelId'] = item.businessChannelId
+                    body['mobileChannelId'] = item.businessChannelId
 
-            if res and 'nccAdgroupId' in res:
-                new_group = res
-                print(f"   -> [성공] 그룹 생성됨 ({new_group['nccAdgroupId']})")
-            else:
-                # 생성 실패 시 (이름 중복 등) 다음 번호 시도
-                print(f"   -> 생성 실패 ({new_name}), 다음 번호 시도...")
+                # [필수] 광고그룹 유형 복사 (API 문서 기준 필수값)
+                if 'adgroupType' in source_group:
+                    body['adgroupType'] = source_group['adgroupType']
+
+                # 생성 요청
+                new_group = call_api_sync(("POST", "/ncc/adgroups", None, body, auth))
+
+                if new_group and 'nccAdgroupId' in new_group:
+                    target_group_id = new_group['nccAdgroupId']
+                    print(f"   -> [성공] 그룹 생성됨 ({target_group_id})")
+                    break 
+                else:
+                    print(f"   -> 생성 실패 ({new_name}), 다음 번호 시도...")
+                    group_idx += 1
+                    retry_count += 1 
+
+            except Exception as e:
+                print(f"   -> 에러 발생: {e}")
                 group_idx += 1
-        
+                retry_count += 1
+
         if not new_group:
-            print("   -> [오류] 그룹 생성 반복 실패로 중단")
+            print("   -> [오류] 5회 연속 생성 실패로 작업을 중단합니다.")
             break
 
-        # 생성된 그룹에 키워드 채우기 (최대 1000개)
-        target_group_id = new_group['nccAdgroupId']
+        # 키워드 등록 (파라미터 수정된 함수 사용)
         chunk = remaining_keywords[:1000]
         _add_keywords_simple(target_group_id, chunk, item.bidAmt, auth)
         remaining_keywords = remaining_keywords[1000:]
         
-        # 다음 그룹을 위해 인덱스 증가
         group_idx += 1
 
-    return {"status": "success", "message": "키워드 등록 완료 (소재/확장소재는 별도 복사 필요)"}
+    return {"status": "success", "message": "작업 완료"}
 
 if getattr(sys, 'frozen', False):
     dist_path = os.path.join(sys._MEIPASS, "dist")
