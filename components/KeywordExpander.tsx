@@ -233,22 +233,25 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
                     {campaigns.map(c => <option key={c.nccCampaignId} value={c.nccCampaignId}>{c.name}</option>)}
                 </select>
 
-                {/* ▼▼▼ [누락되었던 부분] 비즈채널 선택 박스 추가 ▼▼▼ */}
+                {/* ▼▼▼ [수정된 비즈채널 선택 박스] ▼▼▼ */}
                 <span className="font-bold text-gray-700 min-w-[80px] ml-4">비즈채널:</span>
-                <select
-                    className="flex-1 border p-2 rounded focus:ring-2 focus:ring-naver-green outline-none"
-                  value={selectedChannelId}
-                  onChange={(e) => setSelectedChannelId(e.target.value)}
+                <select 
+                    className="flex-1 border p-2 rounded focus:ring-2 focus:ring-naver-green outline-none" 
+                    value={selectedChannelId} 
+                    onChange={(e) => setSelectedChannelId(e.target.value)}
                 >
                     <option value="">웹사이트를 선택하세요 (필수)</option>
                     {channels
-                        .filter((ch) => ["WEB", "WEB_SITE", "SITE"].includes(ch.type)) // 필터링 조건 수정
-                        .map((ch) => (
-                           <option key={ch.nccBusinessChannelId} value={ch.nccBusinessChannelId}>
+                        // [수정] 네이버 API 값인 'SITE'를 필터링합니다.
+                        .filter(ch => ch.type === 'SITE') 
+                        .map(ch => (
+                            <option key={ch.nccBusinessChannelId} value={ch.nccBusinessChannelId}>
                                 {ch.name} ({ch.channelKey})
                             </option>
-                       ))}
+                        ))
+                    }
                 </select>
+                {/* ▲▲▲ -------------------------- ▲▲▲ */}
 
                 {isLoadingGroups && <Loader2 className="animate-spin text-gray-400"/>}
             </div>
