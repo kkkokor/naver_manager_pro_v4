@@ -1,5 +1,3 @@
-// components/ExtensionManager.tsx 전체 덮어쓰기
-
 import React, { useState, useEffect } from 'react';
 import { naverService } from '../services/naverService';
 import { Extension, Campaign, AdGroup, BusinessChannel } from '../types';
@@ -171,11 +169,15 @@ export const ExtensionManager: React.FC = () => {
     try {
         for (const targetGroupId of Array.from(targets)) {
             try {
+                // [핵심 수정] 데이터 유실 방지를 위해 adExtension 키로 감싸서(Wrapping) 전송
+                // 이렇게 하면 중간 과정에서 데이터가 spread(분해)되어도 서버가 'adExtension' 키를 통해 내용을 찾을 수 있음
+                const payload = { adExtension: group.content };
+
                 await naverService.createExtension(
                     targetGroupId, 
                     group.type, 
                     group.businessChannelId, 
-                    group.content
+                    payload // group.content 대신 payload 전송
                 );
                 successCount++;
             } catch (e) {
@@ -434,7 +436,6 @@ export const ExtensionManager: React.FC = () => {
             ) : (
               <div className="flex flex-col items-center justify-center h-full text-gray-400 border-2 border-dashed border-gray-300 rounded-xl bg-white/50">
                 <AlertCircle className="w-12 h-12 mb-3 opacity-30"/>
-                {/* [수정] tabs -> dynamicTabs로 변경 */}
                 <p className="font-medium">등록된 '{dynamicTabs.find(t=>t.id===activeTab)?.label}' 확장소재가 없습니다.</p>
               </div>
             )}

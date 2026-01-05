@@ -1,4 +1,4 @@
-print("\n\n🔥🔥🔥 [최종 수정본 실행됨: 중복 함수 없음] 🔥🔥🔥\n\n")
+print("\n\n🔥🔥🔥 [최종 수정본 실행됨: 중복 포장지 제거] 🔥🔥🔥\n\n")
 
 import hashlib
 import hmac
@@ -55,15 +55,15 @@ class AdCreateItem(BaseModel):
     adGroupId: str
     headline: str
     description: str
-    pcUrl: str  # [필수] 연결URL (PC)
-    mobileUrl: str # [필수] 연결URL (Mobile)
+    pcUrl: str
+    mobileUrl: str
 
 class ExtensionCreateItem(BaseModel):
     adGroupId: str
     type: str 
     businessChannelId: Optional[str] = None
     attributes: Optional[Dict[str, Any]] = None 
-    adExtension: Optional[Dict[str, Any]] = None
+    adExtension: Optional[Any] = None
 
 class StatusUpdate(BaseModel):
     status: str 
@@ -219,6 +219,7 @@ def normalize_type(raw_type: str) -> str:
 def safe_json_parse(data):
     if data is None: return {}
     if isinstance(data, dict): return data
+    if isinstance(data, list): return data
     if isinstance(data, str):
         try:
             return json.loads(data)
@@ -447,20 +448,15 @@ def get_ads(campaign_id: Optional[str] = None, adgroup_id: Optional[str] = None,
 def create_ad(item: AdCreateItem, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
     auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
     
-    # [수정] TEXT_45 필수 구조: pc, mobile 객체 안에 final(URL) 포함
     ad_content = {
         "headline": item.headline,
         "description": item.description,
-        "pc": {
-            "final": item.pcUrl
-        },
-        "mobile": {
-            "final": item.mobileUrl
-        }
+        "pc": { "final": item.pcUrl },
+        "mobile": { "final": item.mobileUrl }
     }
     
     body = {
-        "type": "TEXT_45",  # [수정] TEXT -> TEXT_45 변경
+        "type": "TEXT_45",
         "nccAdgroupId": item.adGroupId, 
         "ad": ad_content 
     }
@@ -482,8 +478,6 @@ def clone_ads(item: CloneAdsItem, x_naver_access_key: str = Header(...), x_naver
     success_count = 0
     fail_count = 0
 
-    print(f"[Clone Ads] 시작: {item.sourceGroupId} -> {item.targetGroupId}")
-
     for ad in source_ads:
         ad_content = ad.get('ad')
         if isinstance(ad_content, str):
@@ -492,7 +486,6 @@ def clone_ads(item: CloneAdsItem, x_naver_access_key: str = Header(...), x_naver
             except:
                 pass
         
-        # [수정] TEXT_45 타입 사용
         body = {
             "type": "TEXT_45",
             "nccAdgroupId": item.targetGroupId, 
@@ -502,10 +495,8 @@ def clone_ads(item: CloneAdsItem, x_naver_access_key: str = Header(...), x_naver
         res = call_api_sync(("POST", "/ncc/ads", None, body, auth))
         if res:
             success_count += 1
-            print(f"   -> [성공] 소재 복제 완료")
         else:
             fail_count += 1
-            print(f"   -> [실패] 소재 복제 실패")
 
     return {"status": "success", "count": success_count, "failed": fail_count}
 
@@ -567,28 +558,15 @@ def get_extensions(
     
     return []
 
-# [수정됨] 개별 확장소재 생성 함수 (SUB_LINKS 디버깅 모드 적용)
+# [▼▼▼ 수정됨: create_extension (중복 포장 제거 및 디버깅) ▼▼▼]
 @app.post("/api/extensions")
 def create_extension(item: ExtensionCreateItem, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
     auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
 
-    # [디버깅] 프론트엔드로부터 받은 요청 데이터 확인
-    print(f"\n🔥🔥 [create_extension 요청 수신] 타입: {item.type} 🔥🔥")
+    print(f"\n🔥🔥 [create_extension] 타입: {item.type} 🔥🔥")
     
     incoming_data = item.adExtension or item.attributes
-    if incoming_data:
-        print(f" >> 수신된 데이터 내용: {json.dumps(incoming_data, indent=2, ensure_ascii=False)}")
-    else:
-        print(" >> 수신된 데이터 내용이 없습니다 (None)")
-
-    # [중요] SUB_LINKS는 원본 확인이 목적이므로 네이버로 전송하지 않음!
-    if item.type.upper() == "SUB_LINKS":
-        print("⚠️ [분석 모드] SUB_LINKS 생성 요청을 감지했으나, 데이터 구조 확인을 위해 전송을 중단합니다.")
-        print("----------------------------------------------------------------")
-        # 에러가 나지 않도록 가짜 성공 응답 반환
-        return {"nccAdExtensionId": "debug_skipped", "type": "SUB_LINKS", "status": "DEBUG"}
-
-    # --- 이하 기존 전송 로직 ---
+    
     body = {
         "ownerId": item.adGroupId,
         "type": item.type.upper()
@@ -597,26 +575,20 @@ def create_extension(item: ExtensionCreateItem, x_naver_access_key: str = Header
         body["pcChannelId"] = item.businessChannelId
         body["mobileChannelId"] = item.businessChannelId
 
-    ext_type = item.type.upper()
-    raw_attrs = item.attributes or item.adExtension or {}
-    
-    # 데이터 구조 정제
-    if "adExtension" in raw_attrs and isinstance(raw_attrs["adExtension"], dict):
-        clean_attrs = raw_attrs["adExtension"].copy()
-    else:
-        clean_attrs = raw_attrs.copy() if isinstance(raw_attrs, dict) else raw_attrs
-    
-    # 시스템 필드 제거
-    if ext_type not in ["PHONE", "PLACE", "LOCATION"]:
-        if isinstance(clean_attrs, dict):
-            for key in ['inspectStatus', 'status', 'regTm', 'editTm', 'nccAdExtensionId', 'nccAdGroupId', 'ownerId', 'type', 'pcChannelId', 'mobileChannelId']:
-                clean_attrs.pop(key, None)
+    if incoming_data:
+        # [핵심] 프론트엔드가 'adExtension'이라는 키로 한번 감싸서 보냈는지 확인하고, 감쌌다면 벗겨내기
+        if isinstance(incoming_data, dict) and "adExtension" in incoming_data:
+            print(" >> [처리] 프론트엔드 포장지 제거 (Unwrapping adExtension)")
+            real_data = incoming_data["adExtension"]
+        else:
+            real_data = incoming_data
 
-            if ext_type == "WEBSITE_INFO":
-                clean_attrs["agree"] = True
-            
-    if clean_attrs:
-        body["adExtension"] = clean_attrs
+        # 최종 데이터를 Body에 할당
+        body["adExtension"] = real_data
+        
+        # WEBSITE_INFO 동의 처리 등 추가 정제
+        if isinstance(real_data, dict) and item.type.upper() == "WEBSITE_INFO":
+             real_data["agree"] = True
 
     uri = "/ncc/ad-extensions"
     
@@ -626,7 +598,6 @@ def create_extension(item: ExtensionCreateItem, x_naver_access_key: str = Header
     print(f"[FAIL] Extension Create Failed. Body: {body}")
     raise HTTPException(status_code=400, detail="Failed to create extension")
 
-# [▼▼▼ 확장소재 복제 (SUB_LINKS 디버깅 모드) ▼▼▼]
 @app.post("/api/extensions/clone/{new_group_id}")
 def clone_extensions(source_group_id: str, new_group_id: str, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
     auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
@@ -643,31 +614,14 @@ def clone_extensions(source_group_id: str, new_group_id: str, x_naver_access_key
     IMPOSSIBLE_TYPES = [
         "SHOPPING_EXTRA", "CATALOG_EXTRA", "CATALOG_EVENT", "CATALOG_PURCHASE_CONDITION",
         "SHOPPING_BRAND_BROADCAST", "SHOPPING_BRAND_EVENT", "PLACE_SMART_ORDER", "NAVER_BLOG_REVIEW",
-        # "POWER_LINK_IMAGE", 
         "IMAGE_SUB_LINKS", 
         "CATALOG_IMAGE", "NAVER_TV_VIDEO",
         "SHOPPING_BRAND_IMAGE", "SHOPPING_BRAND_VIDEO"
     ]
     
-    print(f"\n🔥🔥 [전체 확장소재 원본 데이터 출력 시작] (총 {len(res)}개) 🔥🔥")
-
     for ext in res:
         ext_type = ext.get("type", "UNKNOWN")
         
-        # [디버깅] 데이터 출력
-        print(f"\n >> 타입: {ext_type}")
-        print(f" >> 데이터 존재 여부: {'adExtension' in ext}")
-        if 'adExtension' in ext:
-            print(f" >> 데이터 내용: {json.dumps(ext['adExtension'], ensure_ascii=False)}")
-        else:
-            print(f" >> 전체 구조: {json.dumps(ext, ensure_ascii=False)}")
-        print("----------------------------------------------------")
-
-        # [중요] SUB_LINKS는 전송하지 않고 건너뜀 (분석용)
-        if ext_type == "SUB_LINKS":
-            print("⚠️ [분석 모드] SUB_LINKS는 전송하지 않고 건너뜁니다.")
-            continue
-
         if ext_type in IMPOSSIBLE_TYPES:
             print(f"⚠️ [스킵] {ext_type}는 API 생성 불가")
             continue
@@ -683,14 +637,15 @@ def clone_extensions(source_group_id: str, new_group_id: str, x_naver_access_key
             if "adExtension" in ext:
                 new_extension["adExtension"] = ext["adExtension"]
             
-            call_api_sync(("POST", "/ncc/ad-extensions", None, new_extension, auth))
-            success_count += 1
+            create_res = call_api_sync(("POST", "/ncc/ad-extensions", None, new_extension, auth))
+            if create_res:
+                success_count += 1
+            else:
+                fail_count += 1
                 
         except Exception as e:
             print(f"[Clone Error] {e}")
             fail_count += 1
-            
-    print("\n🔥🔥 [전체 확장소재 원본 데이터 출력 종료] 🔥🔥\n")
 
     return {"status": "completed", "success": success_count, "failed": fail_count}
 
