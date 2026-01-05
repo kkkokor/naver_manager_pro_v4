@@ -27,6 +27,9 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
     const [mainKeywords, setMainKeywords] = useState<string>('');
     const [useAB, setUseAB] = useState<boolean>(true);
     const [useBA, setUseBA] = useState<boolean>(false);
+    // [추가] 메인 키워드 포함 옵션 (Simple Mode)
+    const [includeMainSimple, setIncludeMainSimple] = useState<boolean>(false); 
+    
     const [generatedKeywords, setGeneratedKeywords] = useState<string[]>([]);
     const [groupNameFilter, setGroupNameFilter] = useState<string>('');
     const [filteredGroups, setFilteredGroups] = useState<AdGroup[]>([]);
@@ -37,14 +40,16 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
     const [batchMainKeywords, setBatchMainKeywords] = useState<string>('');
     const [batchUseAB, setBatchUseAB] = useState<boolean>(true);
     const [batchUseBA, setBatchUseBA] = useState<boolean>(false);
+    // [추가] 메인 키워드 포함 옵션 (Batch Mode)
+    const [includeMainBatch, setIncludeMainBatch] = useState<boolean>(false);
 
     // [초기화] 비즈채널 목록 가져오기
     useEffect(() => {
         naverService.getChannels()
             .then(res => {
-                console.log("[DEBUG] 불러온 채널 목록:", res); // 디버깅용 로그 출력
+                console.log("[DEBUG] 불러온 채널 목록:", res);
                 setChannels(res);
-         })
+            })
             .catch(err => console.error("채널 로드 실패:", err));
     }, []);
 
@@ -85,14 +90,23 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
         const listA = regions.split('\n').map(s => s.trim()).filter(s => s);
         const listB = mainKeywords.split('\n').map(s => s.trim()).filter(s => s);
         if (listA.length === 0 || listB.length === 0) { alert("A/B 리스트를 입력하세요."); return; }
-        const result: string[] = [];
+        
+        // [수정] Set을 사용하여 중복 제거 및 순서 보장
+        const result = new Set<string>();
+
+        // 1. 메인 키워드(B) 먼저 추가 (옵션 켜져있을 시)
+        if (includeMainSimple) {
+            listB.forEach(b => result.add(b));
+        }
+
+        // 2. 조합 추가
         for (const a of listA) {
             for (const b of listB) {
-                if (useAB) result.push(`${a}${b}`);
-                if (useBA) result.push(`${b}${a}`);
+                if (useAB) result.add(`${a}${b}`);
+                if (useBA) result.add(`${b}${a}`);
             }
         }
-        setGeneratedKeywords([...new Set(result)]);
+        setGeneratedKeywords(Array.from(result));
     };
 
     const parseBatchData = () => {
@@ -115,14 +129,23 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
             if (!targetGroup) targetGroup = adGroups.find(g => g.name.includes(groupNameTarget));
 
             if (targetGroup) {
-                const keywords: string[] = [];
+                // [수정] Set 사용
+                const keywordsSet = new Set<string>();
+                
+                // 1. 메인 키워드(B) 먼저 추가 (옵션 켜져있을 시)
+                // (각 그룹마다 메인 키워드 추가 시도 -> 서버에서 중복 체크됨)
+                if (includeMainBatch) {
+                    mainKwds.forEach(main => keywordsSet.add(main));
+                }
+
+                // 2. 조합 추가
                 regionList.forEach(region => {
                     mainKwds.forEach(main => {
-                        if (batchUseAB) keywords.push(`${region}${main}`);
-                        if (batchUseBA) keywords.push(`${main}${region}`);
+                        if (batchUseAB) keywordsSet.add(`${region}${main}`);
+                        if (batchUseBA) keywordsSet.add(`${main}${region}`);
                     });
                 });
-                tasks.push({ groupId: targetGroup.nccAdGroupId, groupName: targetGroup.name, keywords });
+                tasks.push({ groupId: targetGroup.nccAdGroupId, groupName: targetGroup.name, keywords: Array.from(keywordsSet) });
             } else {
                 missingGroups.push(groupNameTarget);
             }
@@ -233,7 +256,6 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
                     {campaigns.map(c => <option key={c.nccCampaignId} value={c.nccCampaignId}>{c.name}</option>)}
                 </select>
 
-                {/* ▼▼▼ [수정된 비즈채널 선택 박스] ▼▼▼ */}
                 <span className="font-bold text-gray-700 min-w-[80px] ml-4">비즈채널:</span>
                 <select 
                     className="flex-1 border p-2 rounded focus:ring-2 focus:ring-naver-green outline-none" 
@@ -242,7 +264,6 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
                 >
                     <option value="">웹사이트를 선택하세요 (필수)</option>
                     {channels
-                        // [수정] 네이버 API 값인 'SITE'를 필터링합니다.
                         .filter(ch => ch.type === 'SITE') 
                         .map(ch => (
                             <option key={ch.nccBusinessChannelId} value={ch.nccBusinessChannelId}>
@@ -251,7 +272,6 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
                         ))
                     }
                 </select>
-                {/* ▲▲▲ -------------------------- ▲▲▲ */}
 
                 {isLoadingGroups && <Loader2 className="animate-spin text-gray-400"/>}
             </div>
@@ -264,7 +284,15 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
                             <div className="flex flex-col"><label className="text-sm font-bold text-gray-700 mb-1">A 리스트 (지역)</label><textarea className="flex-1 border p-3 rounded bg-gray-50 text-sm resize-none" placeholder="파주&#13;&#10;일산" value={regions} onChange={e => setRegions(e.target.value)} /></div>
                             <div className="flex flex-col"><label className="text-sm font-bold text-gray-700 mb-1">B 리스트 (키워드)</label><textarea className="flex-1 border p-3 rounded bg-gray-50 text-sm resize-none" placeholder="변기막힘" value={mainKeywords} onChange={e => setMainKeywords(e.target.value)} /></div>
                         </div>
-                        <div className="flex space-x-6 bg-gray-50 p-3 rounded"><label className="flex items-center"><input type="checkbox" checked={useAB} onChange={e => setUseAB(e.target.checked)} className="mr-2"/>A+B</label><label className="flex items-center"><input type="checkbox" checked={useBA} onChange={e => setUseBA(e.target.checked)} className="mr-2"/>B+A</label></div>
+                        <div className="flex space-x-6 bg-gray-50 p-3 rounded flex-wrap">
+                            <label className="flex items-center"><input type="checkbox" checked={useAB} onChange={e => setUseAB(e.target.checked)} className="mr-2"/>A+B</label>
+                            <label className="flex items-center"><input type="checkbox" checked={useBA} onChange={e => setUseBA(e.target.checked)} className="mr-2"/>B+A</label>
+                            {/* [추가] 메인 키워드 포함 옵션 */}
+                            <label className="flex items-center cursor-pointer">
+                                <input type="checkbox" checked={includeMainSimple} onChange={e => setIncludeMainSimple(e.target.checked)} className="rounded text-red-600 focus:ring-red-500 mr-2"/>
+                                <span className="text-sm font-bold text-red-600">메인 키워드(B) 포함</span>
+                            </label>
+                        </div>
                         <button onClick={handleCombineSimple} className="w-full bg-gray-700 text-white py-2 rounded font-bold">조합 결과 생성</button>
                     </div>
                     <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm flex flex-col gap-4">
@@ -309,9 +337,14 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
                         </div>
 
                         <div className="bg-gray-50 p-3 rounded border border-gray-200">
-                            <div className="flex gap-4">
+                            <div className="flex flex-wrap gap-4">
                                 <label className="flex items-center text-sm cursor-pointer"><input type="checkbox" checked={batchUseAB} onChange={e => setBatchUseAB(e.target.checked)} className="mr-2"/>A + B</label>
                                 <label className="flex items-center text-sm cursor-pointer"><input type="checkbox" checked={batchUseBA} onChange={e => setBatchUseBA(e.target.checked)} className="mr-2"/>B + A</label>
+                                {/* [추가] 메인 키워드 포함 옵션 */}
+                                <label className="flex items-center cursor-pointer">
+                                    <input type="checkbox" checked={includeMainBatch} onChange={e => setIncludeMainBatch(e.target.checked)} className="rounded text-red-600 focus:ring-red-500 mr-2"/>
+                                    <span className="text-sm font-bold text-red-600">메인 키워드(B) 포함</span>
+                                </label>
                             </div>
                         </div>
 

@@ -443,16 +443,17 @@ def get_ads(campaign_id: Optional[str] = None, adgroup_id: Optional[str] = None,
         return convert_ads(all_ads)
     return []
 
-# [소재 생성 - TEXT_45 대응]
+# [수정됨] 소재 생성 함수 (자동으로 줄바꿈/공백 제거 기능 추가)
 @app.post("/api/ads")
 def create_ad(item: AdCreateItem, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
     auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
     
+    # [핵심 수정] 입력된 값 앞뒤의 공백과 줄바꿈(\n)을 자동으로 제거(.strip())
     ad_content = {
-        "headline": item.headline,
-        "description": item.description,
-        "pc": { "final": item.pcUrl },
-        "mobile": { "final": item.mobileUrl }
+        "headline": item.headline.strip(), 
+        "description": item.description.strip(),
+        "pc": { "final": item.pcUrl.strip() },
+        "mobile": { "final": item.mobileUrl.strip() }
     }
     
     body = {
@@ -559,6 +560,7 @@ def get_extensions(
     return []
 
 # [▼▼▼ 수정됨: create_extension (중복 포장 제거 및 디버깅) ▼▼▼]
+# [수정됨] PHONE 오류 해결 및 중복 포장 제거 적용된 create_extension
 @app.post("/api/extensions")
 def create_extension(item: ExtensionCreateItem, x_naver_access_key: str = Header(...), x_naver_secret_key: str = Header(...), x_naver_customer_id: str = Header(...)):
     auth = {"api_key": x_naver_access_key, "secret_key": x_naver_secret_key, "customer_id": x_naver_customer_id}
@@ -575,20 +577,25 @@ def create_extension(item: ExtensionCreateItem, x_naver_access_key: str = Header
         body["pcChannelId"] = item.businessChannelId
         body["mobileChannelId"] = item.businessChannelId
 
+    # 데이터 처리 및 할당 로직
+    real_data = None
     if incoming_data:
-        # [핵심] 프론트엔드가 'adExtension'이라는 키로 한번 감싸서 보냈는지 확인하고, 감쌌다면 벗겨내기
+        # [핵심 1] 프론트엔드 포장지 제거 (Unwrapping)
         if isinstance(incoming_data, dict) and "adExtension" in incoming_data:
             print(" >> [처리] 프론트엔드 포장지 제거 (Unwrapping adExtension)")
             real_data = incoming_data["adExtension"]
         else:
             real_data = incoming_data
 
-        # 최종 데이터를 Body에 할당
-        body["adExtension"] = real_data
-        
-        # WEBSITE_INFO 동의 처리 등 추가 정제
-        if isinstance(real_data, dict) and item.type.upper() == "WEBSITE_INFO":
-             real_data["agree"] = True
+    # [핵심 2] PHONE, PLACE, LOCATION은 adExtension 필드를 아예 보내면 안 됨 (4003 에러 방지)
+    if item.type.upper() not in ["PHONE", "PLACE", "LOCATION"]:
+        if real_data:
+            # WEBSITE_INFO 동의 처리
+            if isinstance(real_data, dict) and item.type.upper() == "WEBSITE_INFO":
+                 real_data["agree"] = True
+            body["adExtension"] = real_data
+    else:
+        print(f" >> [알림] {item.type} 타입은 adExtension 필드를 전송하지 않습니다. (비즈채널 ID만 사용)")
 
     uri = "/ncc/ad-extensions"
     
