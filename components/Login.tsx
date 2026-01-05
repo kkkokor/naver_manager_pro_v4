@@ -1,116 +1,131 @@
 import React, { useState, useEffect } from 'react';
-import { Lock, Key, User, Save } from 'lucide-react';
+import { Lock, User, LogIn, Loader2 } from 'lucide-react'; // 아이콘 유지/추가
+import { naverService } from '../services/naverService';
 
-interface LoginProps {
-    onLogin: (apiKey: string, secretKey: string, customerId: string) => void;
+interface Props {
+  onLoginSuccess: () => void;
+  onGoRegister: () => void;
 }
 
-export const Login: React.FC<LoginProps> = ({ onLogin }) => {
-    const [apiKey, setApiKey] = useState('');
-    const [secretKey, setSecretKey] = useState('');
-    const [customerId, setCustomerId] = useState('');
-    const [rememberMe, setRememberMe] = useState(false);
+export const Login: React.FC<Props> = ({ onLoginSuccess, onGoRegister }) => {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [rememberMe, setRememberMe] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-    useEffect(() => {
-        const savedApi = localStorage.getItem('naver_api_key');
-        const savedSecret = localStorage.getItem('naver_secret_key');
-        const savedCustomer = localStorage.getItem('naver_customer_id');
-        if (savedApi && savedSecret && savedCustomer) {
-            setApiKey(savedApi);
-            setSecretKey(savedSecret);
-            setCustomerId(savedCustomer);
-            setRememberMe(true);
-        }
-    }, []);
+  // [기존 기능 복구] 저장된 아이디 불러오기
+  useEffect(() => {
+    const savedId = localStorage.getItem('saved_username');
+    if (savedId) {
+      setUsername(savedId);
+      setRememberMe(true);
+    }
+  }, []);
 
-    const handleSubmit = (e: React.FormEvent) => {
-        e.preventDefault();
-        if (rememberMe) {
-            localStorage.setItem('naver_api_key', apiKey);
-            localStorage.setItem('naver_secret_key', secretKey);
-            localStorage.setItem('naver_customer_id', customerId);
-        } else {
-            localStorage.removeItem('naver_api_key');
-            localStorage.removeItem('naver_secret_key');
-            localStorage.removeItem('naver_customer_id');
-        }
-        onLogin(apiKey, secretKey, customerId);
-    };
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
 
-    return (
-        <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
-            <div className="bg-white p-8 rounded-xl shadow-lg max-w-md w-full border border-gray-200">
-                <div className="text-center mb-8">
-                    <div className="bg-naver-green w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
-                        <Lock className="text-white w-8 h-8" />
-                    </div>
-                    <h1 className="text-2xl font-bold text-gray-800">네이버 검색광고 로그인</h1>
-                    <p className="text-gray-500 mt-2 text-sm">API Key를 사용하여 안전하게 접속하세요.</p>
-                </div>
+    try {
+      // 1. 아이디 저장 처리 (Remember Me)
+      if (rememberMe) {
+        localStorage.setItem('saved_username', username);
+      } else {
+        localStorage.removeItem('saved_username');
+      }
 
-                <form onSubmit={handleSubmit} className="space-y-6">
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Access License (API Key)</label>
-                        <div className="relative">
-                            <Key className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
-                            <input 
-                                type="text" 
-                                required 
-                                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-naver-green focus:border-transparent outline-none"
-                                placeholder="입력하세요"
-                                value={apiKey}
-                                onChange={e => setApiKey(e.target.value)}
-                            />
-                        </div>
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Secret Key</label>
-                        <div className="relative">
-                            <Lock className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
-                            <input 
-                                type="password" 
-                                required 
-                                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-naver-green focus:border-transparent outline-none"
-                                placeholder="입력하세요"
-                                value={secretKey}
-                                onChange={e => setSecretKey(e.target.value)}
-                            />
-                        </div>
-                    </div>
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Customer ID</label>
-                        <div className="relative">
-                            <User className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
-                            <input 
-                                type="text" 
-                                required 
-                                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-naver-green focus:border-transparent outline-none"
-                                placeholder="예: 123456"
-                                value={customerId}
-                                onChange={e => setCustomerId(e.target.value)}
-                            />
-                        </div>
-                    </div>
+      // 2. 서버에 로그인 요청
+      const formData = new FormData();
+      formData.append('username', username);
+      formData.append('password', password);
+      
+      await naverService.login(formData);
+      onLoginSuccess(); // 성공 시 메인 화면으로 전환
 
-                    <div className="flex items-center gap-2">
-                        <input 
-                            type="checkbox" 
-                            id="remember" 
-                            checked={rememberMe} 
-                            onChange={e => setRememberMe(e.target.checked)}
-                            className="w-4 h-4 accent-naver-green"
-                        />
-                        <label htmlFor="remember" className="text-sm text-gray-600 cursor-pointer">로그인 정보 저장 (자동 로그인)</label>
-                    </div>
+    } catch (error) {
+      alert('로그인 실패: 아이디 또는 비밀번호를 확인해주세요.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
-                    <button 
-                        type="submit" 
-                        className="w-full bg-naver-green text-white font-bold py-3 rounded-lg hover:bg-naver-dark transition-colors shadow-md"
-                    >
-                        접속하기
-                    </button>
-                </form>
-            </div>
+  return (
+    <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
+      <div className="bg-white p-8 rounded-xl shadow-lg max-w-md w-full border border-gray-200">
+        
+        {/* [디자인 유지] 상단 로고 및 타이틀 */}
+        <div className="text-center mb-8">
+          <div className="bg-naver-green w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 shadow-sm">
+            <Lock className="text-white w-8 h-8" />
+          </div>
+          <h1 className="text-2xl font-bold text-gray-800">NAVER AD PRO 로그인</h1>
+          <p className="text-gray-500 mt-2 text-sm">아이디와 비밀번호로 접속하세요.</p>
         </div>
-    );
+
+        <form onSubmit={handleSubmit} className="space-y-6">
+          {/* 아이디 입력 */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">아이디</label>
+            <div className="relative">
+              <User className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
+              <input 
+                type="text" 
+                required 
+                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-naver-green focus:border-transparent outline-none transition-all"
+                placeholder="아이디를 입력하세요"
+                value={username}
+                onChange={e => setUsername(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {/* 비밀번호 입력 */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">비밀번호</label>
+            <div className="relative">
+              <Lock className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
+              <input 
+                type="password" 
+                required 
+                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-naver-green focus:border-transparent outline-none transition-all"
+                placeholder="비밀번호를 입력하세요"
+                value={password}
+                onChange={e => setPassword(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {/* 아이디 저장 체크박스 */}
+          <div className="flex items-center gap-2">
+            <input 
+              type="checkbox" 
+              id="remember" 
+              checked={rememberMe} 
+              onChange={e => setRememberMe(e.target.checked)}
+              className="w-4 h-4 accent-naver-green cursor-pointer"
+            />
+            <label htmlFor="remember" className="text-sm text-gray-600 cursor-pointer select-none">아이디 저장</label>
+          </div>
+
+          {/* 로그인 버튼 */}
+          <button 
+            type="submit" 
+            disabled={loading}
+            className="w-full bg-naver-green text-white font-bold py-3 rounded-lg hover:bg-naver-dark transition-all shadow-md flex justify-center items-center"
+          >
+            {loading ? <Loader2 className="animate-spin w-5 h-5"/> : '접속하기'}
+          </button>
+        </form>
+
+        {/* 회원가입 버튼 연결 */}
+        <div className="mt-6 text-center border-t pt-4">
+          <p className="text-sm text-gray-600 mb-2">아직 계정이 없으신가요?</p>
+          <button onClick={onGoRegister} className="text-indigo-600 font-bold hover:underline text-sm">
+            회원가입하고 시작하기
+          </button>
+        </div>
+
+      </div>
+    </div>
+  );
 };

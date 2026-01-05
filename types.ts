@@ -1,4 +1,4 @@
-// types.ts (기존 코드 유지 + 새 기능 병합 완료)
+// types.ts (기존 코드 100% 유지 + SaaS 인증 타입 추가)
 
 export interface Campaign {
   nccCampaignId: string;
@@ -119,4 +119,23 @@ export enum TabView {
   AUTOBID = 'autobid',
   KEYWORD_EXPANSION = 'keyword_expansion',
   LOG_ANALYTICS = 'log_analytics'
+}
+
+// ==========================================
+// ▼▼▼ [신규 추가] SaaS 인증/회원 관리 타입 ▼▼▼
+// ==========================================
+
+export interface User {
+  id: number;
+  username: string;
+  name: string;
+  is_active: boolean;
+  is_paid: boolean;
+  is_superuser: boolean;
+  naver_access_key?: string; // API 키 설정 여부 확인용
+}
+
+export interface LoginResponse {
+  access_token: string;
+  token_type: string;
 }
