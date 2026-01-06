@@ -7,10 +7,10 @@ import { CreativeManager } from './components/CreativeManager';
 import { ExtensionManager } from './components/ExtensionManager';
 import { LogAnalytics } from './components/LogAnalytics';
 import { IpBlockManager } from './components/IpBlockManager';
-import { Login } from './components/Login';         // [신규] 로그인 컴포넌트
-import { Register } from './components/Register';   // [신규] 회원가입 컴포넌트
-import { ApiSetup } from './components/ApiSetup';   // [신규] API 설정 컴포넌트
-import { AdminDashboard } from './components/AdminDashboard'; // [신규] 관리자 컴포넌트
+import { Login } from './components/Login';
+import { Register } from './components/Register';
+import { ApiSetup } from './components/ApiSetup';
+import { AdminDashboard } from './components/AdminDashboard';
 import { TabView, Campaign, Keyword, User } from './types';
 import { naverService } from './services/naverService';
 import { ArrowRightLeft, RefreshCw, Loader2 } from 'lucide-react';
@@ -22,7 +22,7 @@ const App: React.FC = () => {
   const [view, setView] = useState<'LOGIN' | 'REGISTER' | 'MAIN'>('LOGIN');
 
   // --- [App State] ---
-  const [activeTab, setActiveTab] = useState<string>(TabView.DASHBOARD); // 문자열로 변경하여 확장성 확보
+  const [activeTab, setActiveTab] = useState<string>(TabView.DASHBOARD);
   const [loading, setLoading] = useState<boolean>(false);
   
   // --- [Data States] ---
@@ -44,12 +44,12 @@ const App: React.FC = () => {
   const checkAuth = async () => {
     setAuthChecking(true);
     try {
-      const me = await naverService.getMe(); // 토큰으로 내 정보 조회
+      const me = await naverService.getMe();
       setUser(me);
       setView('MAIN');
-      fetchCampaigns(); // 로그인 성공 시 데이터 로드
+      fetchCampaigns();
     } catch (e) {
-      setView('LOGIN'); // 실패 시 로그인 화면으로
+      setView('LOGIN');
     } finally {
       setAuthChecking(false);
     }
@@ -63,13 +63,11 @@ const App: React.FC = () => {
     setView('LOGIN');
   };
 
-  // 캠페인 목록 로드 (날짜 필터 지원)
+  // 캠페인 목록 로드
   const fetchCampaigns = async (since?: string, until?: string) => {
     setLoading(true);
     try {
-      const s = since || currentSince;
-      const u = until || currentUntil;
-      // 서비스 함수 호출 (날짜 파라미터가 없어도 동작하도록 처리됨)
+      // API 호출 (Service 내부 로직에 따라 파라미터 처리됨)
       const data = await naverService.getCampaigns(); 
       setCampaigns(data);
       
@@ -82,6 +80,11 @@ const App: React.FC = () => {
     }
   };
 
+  // 대시보드 날짜 변경 핸들러
+  const handleDateChange = (since: string, until: string) => {
+    fetchCampaigns(since, until);
+  };
+
   // 키워드 로드 (트리뷰 선택 시)
   const handleSelectAdGroup = async (groupId: string, groupName: string) => {
     setSelectedAdGroupId(groupId);
@@ -90,7 +93,8 @@ const App: React.FC = () => {
     
     setKeywordLoading(true);
     try {
-      const data = await naverService.getKeywords(groupId);
+      // [수정] device 파라미터('MOBILE') 추가 (오류 해결)
+      const data = await naverService.getKeywords(groupId, 'MOBILE');
       setKeywords(data);
     } catch (err) {
       console.error("Failed to load keywords", err);
@@ -100,7 +104,6 @@ const App: React.FC = () => {
   };
 
   // --- 2. 뷰 렌더링 분기 ---
-  
   if (authChecking) {
     return <div className="flex h-full min-h-screen items-center justify-center"><Loader2 className="w-12 h-12 animate-spin text-naver-green"/></div>;
   }
@@ -115,6 +118,7 @@ const App: React.FC = () => {
 
   // --- 3. 메인 콘텐츠 렌더링 ---
   const renderContent = () => {
+    // 로딩 중일 때 표시 (단, 탭 전환 시 깜빡임 방지를 위해 데이터가 아예 없을 때만)
     if (loading && campaigns.length === 0) {
       return (
         <div className="flex h-full items-center justify-center flex-col">
@@ -126,7 +130,8 @@ const App: React.FC = () => {
 
     switch (activeTab) {
       case TabView.DASHBOARD:
-        return <Dashboard campaigns={campaigns} />; // onDateChange는 추후 서버 지원 시 연결
+        // [수정] onDateChange prop 전달 (오류 해결)
+        return <Dashboard campaigns={campaigns} onDateChange={handleDateChange} />;
       
       case TabView.CAMPAIGNS:
         return (
@@ -236,14 +241,22 @@ const App: React.FC = () => {
         );
 
       case TabView.CREATIVE_MANAGER:
-        return <CreativeManager campaigns={campaigns} />;
+        // [수정] campaigns prop 제거 (컴포넌트 내부에서 로드함)
+        return <CreativeManager />;
 
       case TabView.EXTENSION_MANAGER:
+        // [수정] campaigns prop 제거 (컴포넌트 내부에서 로드함)
         return <ExtensionManager />;
 
       case TabView.AUTOBID:
+        // [수정] AutoBidder에 필수 prop 전달
         return (
-            <AutoBidder /> // 기존 AutoBidder 유지
+            <AutoBidder 
+              campaigns={campaigns}
+              keywords={[]} // 자동입찰 모듈 내부에서 별도로 로드하므로 빈 배열 전달 가능
+              adGroups={[]} // 자동입찰 모듈 내부에서 별도로 로드하므로 빈 배열 전달 가능
+              onRefresh={() => fetchCampaigns(currentSince, currentUntil)}
+            />
         );
 
       case TabView.KEYWORD_EXPANSION:
@@ -252,14 +265,12 @@ const App: React.FC = () => {
       case TabView.LOG_ANALYTICS:
         return <LogAnalytics />; 
       
-      case 'IP_BLOCK': // [추가] IP 차단 메뉴
+      case 'IP_BLOCK':
         return <IpBlockManager />;
 
-      // [신규] API 설정 화면
       case 'API_SETUP':
         return <ApiSetup />;
 
-      // [신규] 관리자 화면 (권한 체크는 컴포넌트 내부/Layout에서 처리)
       case 'ADMIN':
         return user?.is_superuser ? <AdminDashboard /> : <div className="p-8 text-center text-red-500">접근 권한이 없습니다.</div>;
 
@@ -276,7 +287,7 @@ const App: React.FC = () => {
         onSelectAdGroup={handleSelectAdGroup}
         selectedAdGroupId={selectedAdGroupId}
         onLogout={handleLogout}
-        user={user!} // [신규] 유저 정보 전달
+        user={user!}
     >
       {renderContent()}
     </Layout>
