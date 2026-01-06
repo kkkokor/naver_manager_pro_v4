@@ -1,4 +1,4 @@
-print("\n\n🔥🔥🔥 [SaaS 모드 실행: 기존 기능 100% 포함 + 보안/관리자 탑재] 🔥🔥🔥\n\n")
+print("\n\n🔥🔥🔥 [SaaS 모드 실행: 암호화 방식 변경(PBKDF2)으로 오류 해결] 🔥🔥🔥\n\n")
 
 import hashlib
 import hmac
@@ -74,7 +74,8 @@ class User(Base):
 
 Base.metadata.create_all(bind=engine)
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# [수정됨] 충돌 나는 bcrypt 대신 안정적인 pbkdf2_sha256 사용
+pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token")
 
 # --- Pydantic Models (데이터 검증) ---
@@ -1111,7 +1112,9 @@ else:
     base_dir = os.path.dirname(__file__)
     frontend_path = os.path.join(base_dir, "frontend")
     dist_local_path = os.path.join(base_dir, "dist")
-    if os.path.exists(frontend_path) and os.path.exists(os.path.join(frontend_path, "index.html")):
+    if os.path.exists(dist_local_path) and os.path.exists(os.path.join(dist_local_path, "index.html")):
+        dist_path = dist_local_path
+    elif os.path.exists(frontend_path) and os.path.exists(os.path.join(frontend_path, "index.html")):
         dist_path = frontend_path
     else:
         dist_path = dist_local_path
@@ -1124,6 +1127,7 @@ else:
         return HTMLResponse("<h1>Backend Running (DB Mode)</h1>")
 
 if __name__ == "__main__":
-    webbrowser.open("http://localhost:8000/docs")
+    # webbrowser.open("http://localhost:8000/docs")  <-- 서버에서는 브라우저가 안 열리니 주석 처리해도 됩니다.
     import uvicorn
+    # 포트를 80으로 변경 (기본 웹 포트)
     uvicorn.run(app, host="0.0.0.0", port=8000, log_config=None)

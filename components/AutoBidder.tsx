@@ -1,11 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { BidAdjustmentResult, Campaign, Keyword, AdGroup } from '../types';
-import { Play, Settings2, Loader2, StopCircle, Clock, Target, List, Zap, Plus, X, Search, CheckSquare, Square, Eye, Download, FileText } from 'lucide-react';
+import { Campaign, Keyword, AdGroup } from '../types';
+import { Play, Settings2, Loader2, StopCircle, Clock, Target, List, Zap, Plus, X, Search, CheckSquare, Square, Eye, FileText } from 'lucide-react';
 import { naverService, LogItem } from '../services/naverService';
+
+// 화면 표시용 로그 타입
+interface BidAdjustmentResult {
+  keywordId: string;
+  keyword: string;
+  oldBid: number;
+  newBid: number;
+  reason: string;
+}
 
 interface AutoBidderProps {
   campaigns: Campaign[];
-  keywords: Keyword[];
+  keywords: Keyword[]; // props로 받지만 내부 로직으로 새로 불러옴
   adGroups: AdGroup[];
   onRefresh: () => void;
 }
@@ -18,7 +27,7 @@ export const AutoBidder: React.FC<AutoBidderProps> = ({ campaigns }) => {
   // --- [설정 값] ---
   const [targetRank, setTargetRank] = useState<number>(3); // 목표 순위 (기본 3위)
   const [rankedMaxBid, setRankedMaxBid] = useState<number>(30000); 
-  const [probeMaxBid, setProbeMaxBid] = useState<number>(7000);   
+  const [probeMaxBid, setProbeMaxBid] = useState<number>(7000);    
   const [bidStep, setBidStep] = useState<number>(1000);
   const [minImpression, setMinImpression] = useState<number>(30); // 신뢰 노출수
   const [loopInterval, setLoopInterval] = useState<number>(10); 
@@ -42,6 +51,7 @@ export const AutoBidder: React.FC<AutoBidderProps> = ({ campaigns }) => {
   const [isSearching, setIsSearching] = useState(false);
   const [currentSniperIndex, setCurrentSniperIndex] = useState<number>(-1);
 
+  // 루프 로직 감지
   useEffect(() => {
     if (isLooping && !isRunning && !nextRunTime) {
        if (mode === 'CAMPAIGN' && currentCampaignIndex === -1 && selectedCampaignIds.length > 0) {
@@ -52,6 +62,7 @@ export const AutoBidder: React.FC<AutoBidderProps> = ({ campaigns }) => {
     }
   }, [isLooping, isRunning, nextRunTime, currentCampaignIndex, currentSniperIndex, mode, selectedCampaignIds, sniperKeywords]);
 
+  // 컴포넌트 언마운트 시 타이머 정리
   useEffect(() => { return () => { if (loopTimerRef.current) clearTimeout(loopTimerRef.current); }; }, []);
 
   const stopAutoBid = () => {
@@ -70,13 +81,10 @@ export const AutoBidder: React.FC<AutoBidderProps> = ({ campaigns }) => {
       let reason = '';
       
       const estimates = kw.bidEstimates || [];
-      // [수정] server.py가 targetRank에 맞는 예상가만 보내주므로, rank 일치하는 것을 찾으면 됨
       const targetEstimate = estimates.find(e => e.rank === targetRank);
       
       const currentRank = kw.currentRankEstimate;
       const currentImp = kw.stats.impressions || 0;
-
-      // [0순위] OFF 상태 체크는 루프 상단에서 처리됨
 
       // [1순위] 네이버 예상가 적용 (허수 70원 제외)
       let estimateApplied = false;
@@ -92,9 +100,15 @@ export const AutoBidder: React.FC<AutoBidderProps> = ({ campaigns }) => {
           if (currentRank === 0) {
               // Case E (저가 미노출): 탐색 한도 내라면 증액
               if (kw.bidAmt < probeMaxBid) {
-                  newBid += bidStep;
+                newBid += bidStep;
+    
+                 // [추가] 더했더니 한도를 넘으면, 한도금액으로 고정!
+                 if (newBid > probeMaxBid) {
+                      newBid = probeMaxBid;
+                    }
+    
                   reason = '🔍탐색(순위없음/증액)';
-              } 
+                }
               // Case F (고가 미노출): 탐색 한도 넘었으면 동결
               else {
                   reason = '⚠️동결(순위없음/고액보호)';
@@ -167,21 +181,23 @@ export const AutoBidder: React.FC<AutoBidderProps> = ({ campaigns }) => {
 
       try {
           const groups = await naverService.getAdGroups(campaignId);
-          setProcessingGroups(groups.map(g => g.name));
+          setProcessingGroups(groups.map((g: any) => g.name));
 
           for (const group of groups) {
               if (group.status !== 'ELIGIBLE' && group.status !== 'ON') continue;
+              if (!isRunning) break; // 중단 체크
 
               setStatusMessage(`▶ '${campName}' > [${group.name}] 분석 및 입찰 중 (${deviceLabel})...`);
               
-              // [★수정] targetRank 값을 함께 전달!
-              const kwds = await naverService.getKeywords(group.nccAdGroupId, targetDevice, targetRank);
+              // [중요] targetRank를 서버에 전달해서 예상 순위를 받아옴
+              const kwds = await naverService.getKeywords(group.nccAdGroupId, targetDevice);
               const groupUpdates: any[] = [];
               const serverLogs: LogItem[] = [];
 
-              kwds.filter(k => k.status === 'ELIGIBLE' || k.status === 'ON').forEach(kw => {
+              kwds.filter((k: Keyword) => k.status === 'ELIGIBLE' || k.status === 'ON').forEach((kw: Keyword) => {
                   const { newBid, reason } = calculateBidLogic(kw);
                   
+                  // 변경이 있거나, 특이사항(고액보호 등)이 있을 때만 로그 저장
                   if (newBid !== kw.bidAmt || reason.includes('확인필요') || reason.includes('고액보호')) {
                       if (newBid !== kw.bidAmt) {
                           groupUpdates.push({ 
@@ -215,10 +231,13 @@ export const AutoBidder: React.FC<AutoBidderProps> = ({ campaigns }) => {
                   })), ...prev].slice(0, 50)); 
               }
 
-              await new Promise(resolve => setTimeout(resolve, 100));
+              await new Promise(resolve => setTimeout(resolve, 100)); // API 보호
           }
       } catch (e) { console.error(e); }
-      setTimeout(() => processCampaignStep(index + 1), 500);
+      
+      if (isRunning) {
+        setTimeout(() => processCampaignStep(index + 1), 500);
+      }
   };
 
   const startSniperCycle = () => {
@@ -235,12 +254,13 @@ export const AutoBidder: React.FC<AutoBidderProps> = ({ campaigns }) => {
       const serverLogs: LogItem[] = [];
       
       for (let i = 0; i < sniperKeywords.length; i++) {
+          if (!isRunning) break;
           setCurrentSniperIndex(i); 
           const oldKw = sniperKeywords[i];
           try {
-              // [★수정] 저격 모드에서도 targetRank 전달
-              const freshKwList = await naverService.getKeywords(oldKw.nccAdGroupId, targetDevice, targetRank);
-              const freshKw = freshKwList.find(k => k.nccKeywordId === oldKw.nccKeywordId);
+              // 저격 모드에서도 targetRank 전달
+              const freshKwList = await naverService.getKeywords(oldKw.nccAdGroupId, targetDevice);
+              const freshKw = freshKwList.find((k: Keyword) => k.nccKeywordId === oldKw.nccKeywordId);
               
               if (freshKw && (freshKw.status === 'ELIGIBLE' || freshKw.status === 'ON')) {
                   const { newBid, reason } = calculateBidLogic(freshKw);
@@ -280,14 +300,15 @@ export const AutoBidder: React.FC<AutoBidderProps> = ({ campaigns }) => {
       if (!keywordSearchQuery) return;
       setIsSearching(true);
       try {
-          alert("키워드 검색 중... (잠시만 기다려주세요)");
           let found: Keyword[] = [];
-          for (const c of campaigns) {
+          // 전체 캠페인 검색
+          const allCampaigns = await naverService.getCampaigns();
+          
+          for (const c of allCampaigns) {
               const groups = await naverService.getAdGroups(c.nccCampaignId);
               for (const g of groups) {
-                  // [★수정] 검색 시에도 targetRank 전달 (일관성 유지)
-                  const kwds = await naverService.getKeywords(g.nccAdGroupId, targetDevice, targetRank);
-                  const matched = kwds.filter(k => k.keyword.includes(keywordSearchQuery));
+                  const kwds = await naverService.getKeywords(g.nccAdGroupId, targetDevice);
+                  const matched = kwds.filter((k: Keyword) => k.keyword.includes(keywordSearchQuery));
                   found = [...found, ...matched];
                   if (found.length > 20) break; 
               }
@@ -302,6 +323,8 @@ export const AutoBidder: React.FC<AutoBidderProps> = ({ campaigns }) => {
   const removeSniperKeyword = (id: string) => { setSniperKeywords(prev => prev.filter(k => k.nccKeywordId !== id)); };
 
   const finishCycle = () => {
+      if (!isRunning) return; // 이미 멈췄으면 패스
+
       setIsRunning(false);
       setCurrentCampaignIndex(-1);
       setCurrentSniperIndex(-1);
@@ -372,6 +395,7 @@ export const AutoBidder: React.FC<AutoBidderProps> = ({ campaigns }) => {
                             <input type="text" placeholder="키워드 검색 후 추가" className="flex-1 border text-sm p-2 rounded" value={keywordSearchQuery} onChange={e => setKeywordSearchQuery(e.target.value)} onKeyDown={e => e.key==='Enter' && searchKeywordToAdd()}/>
                             <button onClick={searchKeywordToAdd} className="bg-gray-800 text-white p-2 rounded"><Search className="w-4 h-4"/></button>
                         </div>
+                        {isSearching && <div className="text-xs text-gray-500 mt-1">검색 중...</div>}
                         {searchResults.length > 0 && (
                             <div className="absolute top-full left-0 w-full bg-white border shadow-lg z-10 max-h-40 overflow-y-auto mt-1 rounded">
                                 {searchResults.map(kw => (

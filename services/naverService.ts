@@ -1,6 +1,6 @@
 import { Campaign, AdGroup, Keyword, Ad, BusinessChannel, Extension, User, LoginResponse } from '../types';
 
-const API_BASE_URL = 'http://localhost:8000';
+const API_BASE_URL = '';
 
 export interface LogItem {
   time: string;
@@ -124,11 +124,11 @@ export const naverService = {
     return res.json();
   },
 
-  // 키워드 목록
-  async getKeywords(adGroupId: string, device: string, targetRank: number = 3): Promise<Keyword[]> {
-    // device 파라미터가 비어있을 경우 대비
+  // 키워드 목록 (수정됨: targetRank 제거)
+  async getKeywords(adGroupId: string, device: string): Promise<Keyword[]> {
     const deviceParam = device || 'MOBILE';
-    const res = await fetch(`${API_BASE_URL}/api/keywords?adgroup_id=${adGroupId}&device=${deviceParam}&target_rank=${targetRank}`, { headers: getHeaders() });
+    // [수정] target_rank 파라미터 삭제함
+    const res = await fetch(`${API_BASE_URL}/api/keywords?adgroup_id=${adGroupId}&device=${deviceParam}`, { headers: getHeaders() });
     if (!res.ok) throw new Error('Failed to fetch keywords');
     return res.json();
   },
