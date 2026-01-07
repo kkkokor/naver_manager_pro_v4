@@ -85,14 +85,25 @@ export const naverService = {
     return response.json();
   },
 
-  // [관리자] 유저 승인
-  async approveUser(userId: number) {
-    const response = await fetch(`${API_BASE_URL}/admin/approve/${userId}`, { 
-      method: 'PUT', 
-      headers: getHeaders() 
+  // [수정] 유저 승인 (개월 수 포함)
+  async approveUser(userId: number, months: number) {
+    // 쿼리 스트링으로 months 전달
+    const res = await fetch(`${API_BASE_URL}/admin/approve/${userId}?months=${months}`, {
+      method: 'PUT',
+      headers: getHeaders()
     });
-    if (!response.ok) throw new Error('승인 처리에 실패했습니다.');
-    return response.json();
+    if (!res.ok) throw new Error("Approve failed");
+    return res.json();
+  },
+
+  // [수정] 유저 승인 취소 (차단)
+  async revokeUser(userId: number) {
+    const res = await fetch(`${API_BASE_URL}/admin/revoke/${userId}`, {
+      method: 'PUT',
+      headers: getHeaders()
+    });
+    if (!res.ok) throw new Error("Revoke failed");
+    return res.json();
   },
 
   // ==========================================
@@ -283,6 +294,13 @@ export const naverService = {
     if (!res.ok) return [];
     return res.json();
   },
+
+  async getVisitLogs() {
+    const res = await fetch(`${API_BASE_URL}/api/track/logs`, { headers: getHeaders() });
+    if (!res.ok) return [];
+    return res.json();
+  },
+
 
   // IP 차단 추가
   async addIpExclusion(ip: string, memo: string) {

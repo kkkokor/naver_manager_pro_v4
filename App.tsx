@@ -14,6 +14,7 @@ import { AdminDashboard } from './components/AdminDashboard';
 import { TabView, Campaign, Keyword, User } from './types';
 import { naverService } from './services/naverService';
 import { ArrowRightLeft, RefreshCw, Loader2 } from 'lucide-react';
+import { Manual } from './components/Manual';
 
 const App: React.FC = () => {
   // --- [SaaS 인증 상태] ---
@@ -129,6 +130,14 @@ const App: React.FC = () => {
     }
 
     switch (activeTab) {
+
+      case TabView.ADMIN:
+        return <AdminDashboard />;
+      
+      // [NEW] 케이스 추가
+      case TabView.MANUAL:
+        return <Manual />;
+        
       case TabView.DASHBOARD:
         // [수정] onDateChange prop 전달 (오류 해결)
         return <Dashboard campaigns={campaigns} onDateChange={handleDateChange} />;

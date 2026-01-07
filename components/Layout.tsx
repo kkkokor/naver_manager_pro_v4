@@ -3,7 +3,7 @@ import { TabView, Campaign, AdGroup, User } from '../types';
 import { 
   LayoutDashboard, Megaphone, Layers, TrendingUp, Image, 
   ChevronRight, ChevronDown, Loader2, Wand2, Box, LogOut, 
-  MousePointer, Key, Shield // [추가] 아이콘
+  MousePointer, Key, Shield, Lock, BookOpen // [추가 1] Lock 아이콘 추가
 } from 'lucide-react';
 import { naverService } from '../services/naverService';
 
@@ -79,6 +79,38 @@ export const Layout: React.FC<LayoutProps> = ({
   const [expandedCampaigns, setExpandedCampaigns] = useState<Set<string>>(new Set());
   const [loadedAdGroups, setLoadedAdGroups] = useState<{[key: string]: AdGroup[]}>({});
   const [loadingGroups, setLoadingGroups] = useState<Set<string>>(new Set());
+
+  // ▼▼▼ [추가 2] 여기서부터 미승인 회원 차단 로직 시작 ▼▼▼
+  // 유저 정보는 있는데, 입금 승인(is_paid)이 안 됐고, 관리자(superuser)도 아니라면?
+  if (user && !user.is_paid && !user.is_superuser) {
+    return (
+      <div className="min-h-screen bg-gray-100 flex flex-col justify-center items-center p-4">
+        <div className="bg-white p-8 rounded-xl shadow-lg max-w-md w-full text-center space-y-4">
+          <div className="bg-yellow-100 p-4 rounded-full w-16 h-16 flex items-center justify-center mx-auto">
+            <Lock className="w-8 h-8 text-yellow-600" />
+          </div>
+          <h2 className="text-2xl font-bold text-gray-800">승인 대기 중입니다</h2>
+          <p className="text-gray-600">
+            서비스 이용을 위해 관리자 승인이 필요합니다.<br/>
+            아래 계좌로 입금 후 연락 부탁드립니다.
+          </p>
+          <div className="bg-gray-50 p-4 rounded-lg text-left text-sm space-y-2 border border-gray-200">
+            <p className="flex justify-between"><span className="font-bold text-gray-500">은행</span> <span className="text-gray-800">농협</span></p>
+            <p className="flex justify-between"><span className="font-bold text-gray-500">예금주</span> <span className="text-gray-800">최지용</span></p>
+            <p className="flex justify-between border-t pt-2 mt-2"><span className="font-bold text-gray-500">계좌번호</span> <span className="font-bold text-blue-600">301-8839-8387-61</span></p>
+            <p className="flex justify-between"><span className="font-bold text-gray-500">문의</span> <span className="text-gray-800">010-8839-8387</span></p>
+          </div>
+          <button 
+            onClick={onLogout}
+            className="w-full bg-gray-800 text-white py-3 rounded-lg hover:bg-gray-700 transition font-bold"
+          >
+            로그아웃 및 홈으로
+          </button>
+        </div>
+      </div>
+    );
+  }
+  // ▲▲▲ [추가 끝] 차단 로직 종료 ▲▲▲
 
   const handleCampaignExpand = async (e: React.MouseEvent, campaignId: string) => {
     e.stopPropagation();
@@ -179,6 +211,18 @@ export const Layout: React.FC<LayoutProps> = ({
             label="유입 분석/차단" 
             isActive={activeTab === TabView.LOG_ANALYTICS} 
             onClick={() => setActiveTab(TabView.LOG_ANALYTICS)} 
+          />
+          
+          {/* [NEW] 사용 가이드 메뉴 추가 */}
+          <div className="border-t border-gray-100 my-2 mx-2"></div>
+          <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 px-2">도움말</div>
+          
+          <SidebarItem 
+            icon={BookOpen} 
+            label="사용 가이드" 
+            isActive={activeTab === TabView.MANUAL} 
+            onClick={() => setActiveTab(TabView.MANUAL)} 
+            className="text-blue-600 hover:bg-blue-50"
           />
 
           {/* [추가] 시스템 메뉴 (API 설정, 관리자) */}

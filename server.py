@@ -1,4 +1,4 @@
-print("\n\n🔥🔥🔥 [SaaS 모드 실행: 암호화 방식 변경(PBKDF2)으로 오류 해결] 🔥🔥🔥\n\n")
+print("\n\n🔥🔥🔥 [SaaS 모드 실행: 기간제 구독 시스템 적용됨] 🔥🔥🔥\n\n")
 
 import hashlib
 import hmac
@@ -17,14 +17,13 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# --- 추가된 라이브러리 (보안/DB) ---
 from fastapi import FastAPI, HTTPException, Request, Header, Query, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, Integer, String, Boolean
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from passlib.context import CryptContext
@@ -54,27 +53,28 @@ engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# 유저 모델 (DB 테이블)
+# [수정] 유저 모델에 '만료일(subscription_expiry)' 추가
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True) # 아이디
+    username = Column(String, unique=True, index=True)
     hashed_password = Column(String)
-    name = Column(String) # 입금자명
+    name = Column(String)
     phone = Column(String)
     
-    # 네이버 API 정보
     naver_access_key = Column(String, nullable=True)
     naver_secret_key = Column(String, nullable=True)
     naver_customer_id = Column(String, nullable=True)
     
     is_active = Column(Boolean, default=True)
-    is_paid = Column(Boolean, default=False) # 관리자 승인 여부
-    is_superuser = Column(Boolean, default=False) # 관리자 여부
+    is_paid = Column(Boolean, default=False)
+    is_superuser = Column(Boolean, default=False)
+    
+    # [NEW] 이용 기간 만료일 (이 날짜가 지나면 자동으로 is_paid가 꺼짐)
+    subscription_expiry = Column(DateTime, nullable=True)
 
 Base.metadata.create_all(bind=engine)
 
-# [수정됨] 충돌 나는 bcrypt 대신 안정적인 pbkdf2_sha256 사용
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/token")
 
@@ -132,7 +132,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
-# [중요] 로그인한 유저 가져오기 (Dependency)
+# [중요] 유저 인증 및 자동 만료 체크 로직
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -146,17 +146,27 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
             raise credentials_exception
     except JWTError:
         raise credentials_exception
+    
     user = db.query(User).filter(User.username == username).first()
     if user is None:
         raise credentials_exception
+
+    # [NEW] 기간 만료 체크 (관리자가 아니면 체크)
+    if user.is_paid and not user.is_superuser:
+        if user.subscription_expiry and user.subscription_expiry < datetime.now():
+            print(f"🚫 [기간 만료] {user.username}님의 이용 기간이 종료되었습니다.")
+            user.is_paid = False # 권한 박탈
+            db.commit()
+    
     return user
 
 # [중요] 승인된 유저만 통과 (Dependency)
 def get_current_active_user(current_user: User = Depends(get_current_user)):
     if not current_user.is_active:
         raise HTTPException(status_code=400, detail="Inactive user")
+    # 기간 만료 체크는 위에서 이미 수행함
     if not current_user.is_paid and not current_user.is_superuser:
-        raise HTTPException(status_code=403, detail="관리자 승인(결제 확인) 대기 중입니다.")
+        raise HTTPException(status_code=403, detail="관리자 승인(결제 확인) 대기 중이거나 이용 기간이 만료되었습니다.")
     return current_user
 
 # [중요] 관리자만 통과 (Dependency)
@@ -303,7 +313,7 @@ def fetch_stats(ids_list: list, auth: dict, since: str = None, until: str = None
         res = call_api_sync(args)
         if res and 'data' in res:
             for item in res['data']: stats_map[item['id']] = item
-        time.sleep(0.05)
+        time.sleep(0.3)
     return stats_map
 
 def safe_int(value):
@@ -409,7 +419,6 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="이미 존재하는 아이디입니다.")
     
     hashed_pw = get_password_hash(user.password)
-    # 첫 번째 가입자는 자동으로 관리자(Superuser)로 설정 (편의상)
     is_first = db.query(User).count() == 0
     
     new_user = User(
@@ -417,8 +426,8 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
         hashed_password=hashed_pw,
         name=user.name,
         phone=user.phone,
-        is_paid=False, # 기본은 미승인
-        is_superuser=is_first # 첫 가입자만 관리자
+        is_paid=False,
+        is_superuser=is_first
     )
     db.add(new_user)
     db.commit()
@@ -451,25 +460,32 @@ def update_api_keys(keys: UserUpdateKeys, current_user: User = Depends(get_curre
 def get_all_users(current_user: User = Depends(get_current_admin_user), db: Session = Depends(get_db)):
     return db.query(User).all()
 
-# [관리자 전용] 회원 승인 (입금 확인 처리)
+# [수정] 관리자 승인 (개월 수 입력 받음)
 @app.put("/admin/approve/{user_id}")
-def approve_user(user_id: int, current_user: User = Depends(get_current_admin_user), db: Session = Depends(get_db)):
+def approve_user(user_id: int, months: int = Query(1, description="이용 개월 수"), current_user: User = Depends(get_current_admin_user), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    
     user.is_paid = True
+    # 현재 시간 기준으로 N개월 추가
+    user.subscription_expiry = datetime.now() + timedelta(days=30 * months)
+    
     db.commit()
-    return {"status": "success", "message": f"{user.name}님 승인 완료"}
+    return {"status": "success", "message": f"{user.name}님 승인 완료 ({months}개월)", "expiry": user.subscription_expiry}
 
-# [관리자 전용] 승인 취소
+# [수정] 승인 취소 (만료 처리)
 @app.put("/admin/revoke/{user_id}")
 def revoke_user(user_id: int, current_user: User = Depends(get_current_admin_user), db: Session = Depends(get_db)):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    
     user.is_paid = False
+    user.subscription_expiry = None # 만료일 초기화
+    
     db.commit()
-    return {"status": "success", "message": f"{user.name}님 승인 취소"}
+    return {"status": "success", "message": f"{user.name}님 이용 정지 완료"}
 
 # ==========================================
 # 6. 유틸리티 API (로그인 불필요) - 복구됨
@@ -633,7 +649,7 @@ def get_keywords(
                 k_id = item.get('nccKeywordId') or item.get('keywordId') or item.get('key')
                 bid_val = item.get('bid', 0)
                 if k_id: estimates_map[k_id] = [{"rank": target_rank, "bid": bid_val}]
-        time.sleep(0.05)
+        time.sleep(0.3)
 
     result = []
     for k in kwd_list:

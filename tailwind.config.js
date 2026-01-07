@@ -2,13 +2,10 @@
 export default {
   content: [
     "./index.html",
-    "./src/**/*.{js,ts,jsx,tsx}",
-    "./components/**/*.{js,ts,jsx,tsx}",
-    "./**/*.{js,ts,jsx,tsx}",
+    "./src/**/*.{js,ts,jsx,tsx}" // 이것만 남겨두면 됩니다!
   ],
   theme: {
     extend: {
-      // ▼▼▼ 이 부분이 빠져 있어서 색깔이 안 나왔던 겁니다! ▼▼▼
       colors: {
         naver: {
           green: '#03C75A',

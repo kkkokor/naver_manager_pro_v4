@@ -111,14 +111,18 @@ export enum Status {
 }
 
 export enum TabView {
-  DASHBOARD = 'dashboard',
-  CAMPAIGNS = 'campaigns',
-  KEYWORDS = 'keywords',
-  CREATIVE_MANAGER = 'creative_manager',
-  EXTENSION_MANAGER = 'extension_manager',
-  AUTOBID = 'autobid',
-  KEYWORD_EXPANSION = 'keyword_expansion',
-  LOG_ANALYTICS = 'log_analytics'
+  DASHBOARD = 'DASHBOARD',
+  CAMPAIGNS = 'CAMPAIGNS',
+  ADGROUPS = 'ADGROUPS',
+  KEYWORDS = 'KEYWORDS',
+  CREATIVE_MANAGER = 'CREATIVE_MANAGER',   // 소재 관리
+  EXTENSION_MANAGER = 'EXTENSION_MANAGER', // 확장 소재
+  AUTOBID = 'AUTOBID',                     // 자동 입찰
+  KEYWORD_EXPANSION = 'KEYWORD_EXPANSION', // 키워드 확장
+  LOG_ANALYTICS = 'LOG_ANALYTICS',         // 유입 분석
+  API_SETUP = 'API_SETUP',                 // API 설정
+  ADMIN = 'ADMIN',                         // 관리자
+  MANUAL = 'MANUAL',                       // [NEW] 사용 설명서
 }
 
 // ==========================================
@@ -133,6 +137,22 @@ export interface User {
   is_paid: boolean;
   is_superuser: boolean;
   naver_access_key?: string; // API 키 설정 여부 확인용
+}
+
+export interface LoginResponse {
+  access_token: string;
+  token_type: string;
+}
+
+export interface User {
+  id: number;
+  username: string;
+  name: string;
+  is_active: boolean;
+  is_paid: boolean; // 승인 여부
+  is_superuser: boolean;
+  naver_access_key?: string;
+  subscription_expiry?: string; // [NEW] 이용 기간 만료일 (YYYY-MM-DD)
 }
 
 export interface LoginResponse {

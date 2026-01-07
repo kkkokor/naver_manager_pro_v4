@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Lock, User, LogIn, Loader2 } from 'lucide-react'; // 아이콘 유지/추가
 import { naverService } from '../services/naverService';
+import { ShieldCheck } from 'lucide-react';
 
 interface Props {
   onLoginSuccess: () => void;
@@ -123,6 +124,25 @@ export const Login: React.FC<Props> = ({ onLoginSuccess, onGoRegister }) => {
           <button onClick={onGoRegister} className="text-indigo-600 font-bold hover:underline text-sm">
             회원가입하고 시작하기
           </button>
+        </div>
+        
+        {/* ▼▼▼ [추가] 하단 사업자 정보 및 푸터 ▼▼▼ */}
+        <div className="mt-8 text-center text-xs text-gray-400 space-y-2 max-w-2xl">
+        <div className="flex justify-center space-x-4 mb-4">
+            <button className="hover:text-gray-600 underline">이용약관</button>
+            <span className="text-gray-300">|</span>
+            <button className="hover:text-gray-800 font-bold underline">개인정보처리방침</button>
+        </div>
+        <p>
+          상호명: 아이디컴퍼니 | 대표: 최지용 | 사업자등록번호: 619-12-16444<br/>
+          주소: (사업자등록증 상 주소 기재 권장) | 전화번호: 010-8839-8387<br/>
+          계좌번호: 농협 301-8839-8387-61 최지용
+        </p>
+        <p className="flex items-center justify-center mt-2">
+          <ShieldCheck className="w-3 h-3 mr-1" />
+          본 서비스는 네이버 검색광고 API를 준수하며, 사용자의 개인정보를 암호화하여 안전하게 보호합니다.
+        </p>
+        <p className="mt-4">© 2026 ID Company. All rights reserved.</p>
         </div>
 
       </div>
