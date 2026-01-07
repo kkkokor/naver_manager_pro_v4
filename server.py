@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import mimetypes
 from fastapi import FastAPI, HTTPException, Request, Header, Query, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -394,6 +395,12 @@ def load_visit_logs():
 def save_visit_logs(logs):
     with open(VISIT_LOG_FILE, "w", encoding="utf-8") as f:
         json.dump(logs[:1000], f, ensure_ascii=False, indent=2)
+
+
+mimetypes.init()
+mimetypes.add_type('application/javascript', '.js')
+mimetypes.add_type('text/css', '.css')
+mimetypes.add_type('image/svg+xml', '.svg')
 
 # ==========================================
 # 4. FastAPI 앱 설정
