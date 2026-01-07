@@ -606,6 +606,9 @@ def get_keywords(
     device: Optional[str] = Query(None),
     current_user: User = Depends(get_current_active_user)
 ):
+    # ▼▼▼ 이 줄을 꼭 넣어주세요! ▼▼▼
+    print(f"👉 [요청 도착] 키워드 조회 시작! (그룹ID: {adgroup_id})")
+    
     auth = get_naver_auth(current_user)
     adgroup = call_api_sync(("GET", f"/ncc/adgroups/{adgroup_id}", None, None, auth))
     group_bid = adgroup.get('bidAmt', 0) if adgroup else 0

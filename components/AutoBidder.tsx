@@ -35,6 +35,7 @@ export const AutoBidder: React.FC<AutoBidderProps> = ({ campaigns }) => {
 
   // --- [실행 상태] ---
   const [isRunning, setIsRunning] = useState<boolean>(false);
+  const isRunningRef = useRef<boolean>(false);
   const [isLooping, setIsLooping] = useState<boolean>(false);
   const [logs, setLogs] = useState<BidAdjustmentResult[]>([]); // 화면용 로그
   const [statusMessage, setStatusMessage] = useState<string>('대기 중...');
@@ -50,6 +51,10 @@ export const AutoBidder: React.FC<AutoBidderProps> = ({ campaigns }) => {
   const [searchResults, setSearchResults] = useState<Keyword[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [currentSniperIndex, setCurrentSniperIndex] = useState<number>(-1);
+
+  useEffect(() => {
+    isRunningRef.current = isRunning;
+}, [isRunning]);
 
   // 루프 로직 감지
   useEffect(() => {
@@ -152,12 +157,16 @@ export const AutoBidder: React.FC<AutoBidderProps> = ({ campaigns }) => {
   };
 
   const startCampaignCycle = () => {
-      if (selectedCampaignIds.length === 0) return alert("캠페인을 선택하세요.");
-      setNextRunTime(null);
-      setCurrentCampaignIndex(0);
-      setIsRunning(true);
-      processCampaignStep(0);
-  };
+    if (selectedCampaignIds.length === 0) return alert("캠페인을 선택하세요.");
+    setNextRunTime(null);
+    setCurrentCampaignIndex(0);
+    
+    // ▼▼▼ [수정] 순서 변경 및 강제 설정 ▼▼▼
+    setIsRunning(true);
+    isRunningRef.current = true; // 이걸 넣어야 첫 클릭에 바로 됨!
+    
+    processCampaignStep(0);
+    };
 
   const processCampaignStep = async (index: number) => {
       if (index >= selectedCampaignIds.length) {
@@ -185,7 +194,7 @@ export const AutoBidder: React.FC<AutoBidderProps> = ({ campaigns }) => {
 
           for (const group of groups) {
               if (group.status !== 'ELIGIBLE' && group.status !== 'ON') continue;
-              if (!isRunning) break; // 중단 체크
+              if (!isRunningRef.current) break; // <-- [수정] 최신 신호등 확인
 
               setStatusMessage(`▶ '${campName}' > [${group.name}] 분석 및 입찰 중 (${deviceLabel})...`);
               
@@ -241,12 +250,16 @@ export const AutoBidder: React.FC<AutoBidderProps> = ({ campaigns }) => {
   };
 
   const startSniperCycle = () => {
-      if (sniperKeywords.length === 0) return alert("관리할 키워드를 추가해주세요.");
-      setNextRunTime(null);
-      setCurrentSniperIndex(0);
-      setIsRunning(true);
-      processSniperLoop();
-  };
+    if (sniperKeywords.length === 0) return alert("관리할 키워드를 추가해주세요.");
+    setNextRunTime(null);
+    setCurrentSniperIndex(0);
+    
+    // ▼▼▼ [수정] 순서 변경 및 강제 설정 ▼▼▼
+    setIsRunning(true);
+    isRunningRef.current = true; // 저격 모드도 한 번에!
+    
+    processSniperLoop();
+    };
 
   const processSniperLoop = async () => {
       setStatusMessage(`[저격 모드] 핵심 키워드 ${sniperKeywords.length}개 정밀 타격 중...`);
@@ -254,7 +267,7 @@ export const AutoBidder: React.FC<AutoBidderProps> = ({ campaigns }) => {
       const serverLogs: LogItem[] = [];
       
       for (let i = 0; i < sniperKeywords.length; i++) {
-          if (!isRunning) break;
+          if (!isRunningRef.current) break; // <-- [수정] 최신 신호등 확인
           setCurrentSniperIndex(i); 
           const oldKw = sniperKeywords[i];
           try {
@@ -323,7 +336,7 @@ export const AutoBidder: React.FC<AutoBidderProps> = ({ campaigns }) => {
   const removeSniperKeyword = (id: string) => { setSniperKeywords(prev => prev.filter(k => k.nccKeywordId !== id)); };
 
   const finishCycle = () => {
-      if (!isRunning) return; // 이미 멈췄으면 패스
+       if (!isRunningRef.current) return; // <-- [수정]
 
       setIsRunning(false);
       setCurrentCampaignIndex(-1);
