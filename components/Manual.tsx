@@ -166,8 +166,8 @@ export const Manual: React.FC = () => {
                 <div>
                      <h4 className="font-bold text-gray-800 mb-2 flex items-center"><TrendingUp className="w-4 h-4 mr-2"/> 키워드 자동 확장</h4>
                     <p className="text-sm text-gray-600">
-                        "홍대 맛집"과 연관된 키워드는 무엇일까요?<br/>
-                        네이버 데이터를 기반으로 <strong>돈이 될 만한 연관 키워드</strong>를 찾아내고, 내 광고 그룹에 즉시 추가해 줍니다.
+                        각종 키워드 조합을 간편하게 추가하세요!<br/>
+                        10만개의 키워드도 <strong>한번에 등록 가능!</strong> 그룹 내에 키워드 1,000개 이상 시 자동으로 그룹 생성!
                     </p>
                 </div>
             </div>

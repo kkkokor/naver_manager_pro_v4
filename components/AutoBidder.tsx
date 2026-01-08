@@ -18,7 +18,7 @@ interface AutoBidderProps {
   onRefresh: () => void;
 }
 
-// [최적화] 캠페인 리스트 아이템 (개별 메모이제이션)
+// [최적화] 캠페인 리스트 아이템
 const CampaignItem = React.memo(({ 
     c, 
     expandedCampaigns, 
@@ -109,9 +109,12 @@ export const AutoBidder: React.FC<AutoBidderProps> = ({ campaigns }) => {
   const [isSearching, setIsSearching] = useState(false);
   const [currentSniperIndex, setCurrentSniperIndex] = useState<number>(-1);
 
-  useEffect(() => {
-    isRunningRef.current = isRunning;
-  }, [isRunning]);
+useEffect(() => {
+    return () => {
+        console.log("페이지 이동: 자동 입찰 루프를 종료합니다.");
+        isRunningRef.current = false; // 이 한 줄이 유령 작업을 막습니다.
+    };
+}, []);
 
   // [최적화] 함수 재생성 방지
   const toggleExpand = useCallback(async (campId: string) => {
@@ -501,16 +504,20 @@ export const AutoBidder: React.FC<AutoBidderProps> = ({ campaigns }) => {
                     <div><label className="block text-gray-500 text-xs mb-1">탐색 한도</label><input type="number" className="border rounded w-full p-1.5" value={probeMaxBid} onChange={e=>setProbeMaxBid(Number(e.target.value))} disabled={isLooping}/></div>
                     <div><label className="block text-gray-500 text-xs mb-1">반복 간격(분)</label><input type="number" className="border rounded w-full p-1.5" value={loopInterval} onChange={e=>setLoopInterval(Number(e.target.value))} disabled={isLooping}/></div>
                     <div className="bg-yellow-50 border border-yellow-200 rounded p-1">
-                        <div className="flex justify-between items-center mb-1"><label className="block text-yellow-700 text-xs font-bold flex items-center"><Eye className="w-3 h-3 mr-1"/>신뢰 노출수</label></div>
+                        {/* [수정] block과 flex 충돌 해결: block 제거 */}
+                        <div className="flex justify-between items-center mb-1"><label className="text-yellow-700 text-xs font-bold flex items-center"><Eye className="w-3 h-3 mr-1"/>신뢰 노출수</label></div>
                         <input type="number" className="border border-yellow-300 rounded w-full p-1.5 bg-white text-yellow-800 font-bold" value={minImpression} onChange={e=>setMinImpression(Number(e.target.value))} disabled={isLooping}/>
                     </div>
                 </div>
                  <div className="flex items-center justify-between border-t pt-3">
                     <div className="flex items-center"><input type="checkbox" id="loop" className="w-4 h-4 accent-naver-green mr-2" checked={isLooping} onChange={e=>!isRunning && setIsLooping(e.target.checked)} disabled={isRunning}/><label htmlFor="loop" className="text-sm font-bold cursor-pointer">무한 반복 실행</label></div>
-                    {isLooping && isRunning ? (
-                        <button onClick={stopAutoBid} className="bg-red-500 hover:bg-red-600 text-white px-6 py-2 rounded-lg font-bold shadow flex items-center"><StopCircle className="w-4 h-4 mr-2 animate-pulse"/> 중단</button>
+                    {/* [수정] 실행 중이면 무조건 중단 버튼 나오도록 수정 */}
+                    {isRunning ? (
+                        <button onClick={stopAutoBid} className="bg-red-500 hover:bg-red-600 text-white px-6 py-2 rounded-lg font-bold shadow flex items-center animate-pulse"><StopCircle className="w-4 h-4 mr-2"/> 입찰 중단</button>
                     ) : (
-                        <button onClick={startCampaignCycle} className="bg-naver-green hover:bg-naver-dark text-white px-6 py-2 rounded-lg font-bold shadow flex items-center"><Play className="w-4 h-4 mr-2"/> 선택 입찰 시작</button>
+                        <button onClick={mode === 'CAMPAIGN' ? startCampaignCycle : startSniperCycle} className="bg-naver-green hover:bg-naver-dark text-white px-6 py-2 rounded-lg font-bold shadow flex items-center">
+                            <Play className="w-4 h-4 mr-2"/> {mode === 'CAMPAIGN' ? '선택 입찰 시작' : '저격 입찰 시작'}
+                        </button>
                     )}
                 </div>
              </div>

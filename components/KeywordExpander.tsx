@@ -118,11 +118,11 @@ export const KeywordExpander: React.FC<Props> = ({ campaigns }) => {
         const missingGroups: string[] = [];
 
         lines.forEach(line => {
-            const parts = line.split('|');
-            if (parts.length < 2) return;
+            const match = line.match(/(.+)\((.+)\)/); // 괄호로 구분
+            if (!match) return;
 
-            const groupNameTarget = parts[0].trim();
-            const regionsStr = parts[1].trim();
+            const groupNameTarget = match[1].trim(); // 괄호 앞부분이 그룹명
+            const regionsStr = match[2].trim();      // 괄호 안쪽이 지역들
             const regionList = regionsStr.split(/,|\t/).map(s => s.trim()).filter(s => s);
 
             let targetGroup = adGroups.find(g => g.name === groupNameTarget);
